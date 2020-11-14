@@ -92,16 +92,16 @@ _C.MODE_MASK = True        # Faster R-CNN or Mask R-CNN
 _C.MODE_FPN = True
 
 # dataset -----------------------
-_C.DATA.BASEDIR = '/path/to/your/DATA/DIR'
+_C.DATA.BASEDIR = '/home/lupu/27_screenshot/LSVT'
 # All available dataset names are defined in `dataset/coco.py:register_coco`.
 # All TRAIN dataset will be concatenated for training.
-_C.DATA.TRAIN = ('coco_train2017',)   # i.e. trainval35k
+_C.DATA.TRAIN = ('text_train',)   # i.e. trainval35k
 # Each VAL dataset will be evaluated separately (instead of concatenated)
-_C.DATA.VAL = ('coco_val2017',)  # AKA minival2014
+_C.DATA.VAL = ('text_test',)  # AKA minival2014
 
 # These two configs will be populated later inside `finalize_configs`.
-_C.DATA.NUM_CATEGORY = -1  # without the background class (e.g., 80 for COCO)
-_C.DATA.CLASS_NAMES = []  # NUM_CLASS (NUM_CATEGORY+1) strings, the first is "BG".
+_C.DATA.NUM_CATEGORY = 1  # without the background class (e.g., 80 for COCO)
+_C.DATA.CLASS_NAMES = ["BG", "Text"]  # NUM_CLASS (NUM_CATEGORY+1) strings, the first is "BG".
 
 # whether the coordinates in your registered dataset are
 # absolute pixel values in range [0, W or H] or relative values in [0, 1]
@@ -124,7 +124,7 @@ _C.BACKBONE.WEIGHTS = ''
 _C.BACKBONE.RESNET_NUM_BLOCKS = [3, 4, 6, 3]     # for resnet50
 # RESNET_NUM_BLOCKS = [3, 4, 23, 3]    # for resnet101
 _C.BACKBONE.FREEZE_AFFINE = False   # do not train affine parameters inside norm layers
-_C.BACKBONE.NORM = 'FreezeBN'  # options: FreezeBN, SyncBN, GN, None
+_C.BACKBONE.NORM = 'None'  # options: FreezeBN, SyncBN, GN, None
 _C.BACKBONE.FREEZE_AT = 2  # options: 0, 1, 2. How many stages in backbone to freeze (not training)
 
 # Use a base model with TF-preferred padding mode,

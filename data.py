@@ -22,7 +22,7 @@ from common import (
     filter_boxes_inside_shape, np_iou, point4_to_box, polygons_to_mask,
 )
 from config import config as cfg
-from dataset import DatasetRegistry, register_coco
+from dataset import DatasetRegistry, register_coco, register_text
 from utils.np_box_ops import area as np_area
 from utils.np_box_ops import ioa as np_ioa
 
@@ -401,8 +401,9 @@ if __name__ == "__main__":
     from tensorpack.dataflow import PrintData
     from config import finalize_configs
 
-    register_coco(os.path.expanduser("~/data/coco"))
-    finalize_configs()
+    # register_coco(os.path.expanduser("~/data/coco"))
+    register_text('/home/lupu/27_screenshot/LSVT')
+    finalize_configs(True)
     ds = get_train_dataflow()
     ds = PrintData(ds, 10)
     TestDataSpeed(ds, 50000).start()
