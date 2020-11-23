@@ -1,7 +1,3 @@
-//
-// Created by 孙嘉禾 on 2019/12/31.
-//
-
 #include "deformable_conv2d.h"
 
 #include <cmath>

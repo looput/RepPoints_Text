@@ -98,18 +98,20 @@ class DeformableConv2D(keras.layers.Layer):
         kernel_h,kernel_w = self.kernel_size
         height,width = input_shape[2:]
         
-        self.mask = tf.constant(1., shape=[1, kernel_h * kernel_w, height, width])
+        # self.mask = tf.constant(1., shape=[1, kernel_h * kernel_w, height, width])
         self.filter = tf.Variable(initial_value=tf.random.normal(shape=[self.filters, channel, self.kernel_size[0], self.kernel_size[1]]))
         self.built = True
 
     def call(self, x,offset, **kwargs):
         """
         Build static Graph
-        :param inputs: [B,Channel, Height, Width]
-        :param kwargs:
+        :param x: [B,Channel, Height, Width]
+        :param offset: [B,n*2, Height, Width]
         :return:
         """
-        mask = self.mask
+        # 这里mask 并不能直接，因为形状是跟输入有关的
+        mask = tf.math.reduce_mean(offset,axis=1,keepdims=True)*0+1.
+        mask = tf.tile(mask,(1,self.kernel_size[0]*self.kernel_size[0],1,1))
         result = deformable_conv2d_module.deformable_conv2d(
             input=x,
             filter=self.filter,
