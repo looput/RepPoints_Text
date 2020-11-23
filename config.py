@@ -88,8 +88,9 @@ _C = config     # short alias to avoid coding
 
 # mode flags ---------------------
 _C.TRAINER = 'replicated'  # options: 'horovod', 'replicated'
-_C.MODE_MASK = True        # Faster R-CNN or Mask R-CNN
+_C.MODE_MASK = False        # Faster R-CNN or Mask R-CNN
 _C.MODE_FPN = True
+_C.MODE_POLYGON = True
 
 # dataset -----------------------
 _C.DATA.BASEDIR = '/home/lupu/27_screenshot/LSVT'
@@ -124,7 +125,7 @@ _C.BACKBONE.WEIGHTS = ''
 _C.BACKBONE.RESNET_NUM_BLOCKS = [3, 4, 6, 3]     # for resnet50
 # RESNET_NUM_BLOCKS = [3, 4, 23, 3]    # for resnet101
 _C.BACKBONE.FREEZE_AFFINE = False   # do not train affine parameters inside norm layers
-_C.BACKBONE.NORM = 'None'  # options: FreezeBN, SyncBN, GN, None
+_C.BACKBONE.NORM = 'GN'  # options: FreezeBN, SyncBN, GN, None
 _C.BACKBONE.FREEZE_AT = 2  # options: 0, 1, 2. How many stages in backbone to freeze (not training)
 
 # Use a base model with TF-preferred padding mode,
@@ -166,6 +167,9 @@ _C.PREPROC.MAX_SIZE = 1333
 # Un-scaled version: [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
 _C.PREPROC.PIXEL_MEAN = [123.675, 116.28, 103.53]
 _C.PREPROC.PIXEL_STD = [58.395, 57.12, 57.375]
+
+# RepPoint heads -------------------
+_C.REPPOINTS.NUM_POINTS= 9
 
 # anchors -------------------------
 _C.RPN.ANCHOR_STRIDE = 16
