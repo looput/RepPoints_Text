@@ -25,6 +25,10 @@ class TextDection(DatasetSplit):
             fname = os.path.join(self.base_dir,split, img_fname)
             gt_fname = os.path.join(self.base_dir,split, gt_fname)
 
+            if not (fname.endswith('.jpg') or fname.endswith('.JPG') \
+                or fname.endswith('.JPEG') or fname.endswith('.PNG') \
+                or fname.endswith('.png')):
+                continue
             roidb = {"file_name": fname}
             roidb['image_id'] = image_id
 

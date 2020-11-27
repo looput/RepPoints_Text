@@ -6,13 +6,16 @@ import argparse
 from tensorpack import *
 from tensorpack.tfutils import collect_env_info
 
-from dataset import register_coco, register_balloon
+from dataset import register_coco, register_balloon,register_text
 from config import config as cfg
 from config import finalize_configs
 from data import get_train_dataflow
 from eval import EvalCallback
 from modeling.generalized_rcnn import ResNetC4Model, ResNetFPNModel
+from modeling.reppoint_detector import RepPointsFPNDet
 
+import logging
+logging.getLogger('tensorflow').disabled = True
 
 try:
     import horovod.tensorflow as hvd
@@ -37,6 +40,7 @@ if __name__ == '__main__':
         cfg.update_args(args.config)
     register_coco(cfg.DATA.BASEDIR)  # add COCO datasets to the registry
     register_balloon(cfg.DATA.BASEDIR)  # add the demo balloon datasets to the registry
+    register_text(cfg.DATA.BASEDIR)
 
     # Setup logging ...
     is_horovod = cfg.TRAINER == 'horovod'
@@ -49,7 +53,8 @@ if __name__ == '__main__':
     finalize_configs(is_training=True)
 
     # Create model
-    MODEL = ResNetFPNModel() if cfg.MODE_FPN else ResNetC4Model()
+    # MODEL = ResNetFPNModel() if cfg.MODE_FPN else ResNetC4Model()
+    MODEL = RepPointsFPNDet()
 
     # Compute the training schedule from the number of GPUs ...
     stepnum = cfg.TRAIN.STEPS_PER_EPOCH
@@ -75,7 +80,8 @@ if __name__ == '__main__':
     callbacks = [
         PeriodicCallback(
             ModelSaver(max_to_keep=10, keep_checkpoint_every_n_hours=1),
-            every_k_epochs=cfg.TRAIN.CHECKPOINT_PERIOD),
+            every_k_steps=cfg.TRAIN.CHECKPOINT_PERIOD),
+            # every_k_epochs=cfg.TRAIN.CHECKPOINT_PERIOD),
         # linear warmup
         ScheduledHyperParamSetter(
             'learning_rate', warmup_schedule, interp='linear', step_based=True),
@@ -103,6 +109,7 @@ if __name__ == '__main__':
             session_init = SmartInit(cfg.BACKBONE.WEIGHTS)
 
     traincfg = TrainConfig(
+    # traincfg = AutoResumeTrainConfig(
         model=MODEL,
         data=QueueInput(train_dataflow),
         callbacks=callbacks,

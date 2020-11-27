@@ -2,6 +2,8 @@
 # Reimplement of Reppoint with tensorflow.
 # Copyright (c) 2020, HUST loop.
 
+import enum
+from functools import total_ordering
 import sys
 
 # from tensorpack import tfv1 as tf
@@ -17,17 +19,19 @@ from tensorpack.tfutils.summary import add_moving_summary
 sys.path.append('/home/lupu/project/RepPoints')
 
 from config import config as cfg
-from data import get_all_anchors, get_all_anchors_fpn
 from layers.dcn.deformable_conv import DeformableConv2D
 from layers.deformable_conv_layer import DeformableConv_TF
 from utils.box_ops import area as tf_area
 
 from modeling.backbone import (GroupNorm, image_preprocess, resnet_c4_backbone,
                                resnet_conv5, resnet_fpn_backbone)
-from modeling.model_fpn import (fpn_model, generate_fpn_proposals,
-                                multilevel_roi_align, multilevel_rpn_losses)
+from modeling.model_fpn import fpn_model
 from utils.point_generator import PointGenerator
+from layers.loss import smooth_l1loss,sigmoid_focalloss
+from modeling.target_match import match_to_target, assign_to_target
 
+# FIXME ?
+# cfg= cfg.config
 
 def ConvModule(x,out_channels,
             kernel = (3,3),
@@ -78,14 +82,13 @@ def DefConvModule(x,offset,
             name='dcn'):
     
     # this op is only support channel_last only
-    def_conv = DeformableConv2D(out_channels,
+    x = DeformableConv2D(name,x,offset,out_channels,
                                 kernel,
                                 use_bias=False,
                                 padding='SAME')
     # def_conv = DeformableConvLayer(out_channels,kernel,stride,padding='same')
-    x =  def_conv(x,offset)
     if with_norm:
-            x = GroupNorm(f'gn_{name}',x)
+        x = GroupNorm(f'gn_{name}',x)
     if act!='':
         x = tf.keras.layers.Activation(act)(x)
     return x
@@ -118,7 +121,7 @@ class SigleStageDet(ModelDesc):
             [str]: input names
             [str]: output names
         """
-        out = ['output/polygons', 'output/scores', 'output/labels']
+        out = ['output/boxes', 'output/labels']
         if cfg.MODE_MASK:
             out.append('output/masks')
         if cfg.MODE_POLYGON:
@@ -136,10 +139,11 @@ class SigleStageDet(ModelDesc):
         features = self.backbone(image)[1:4]
         box_outs = self.box_head(image,features)
 
-        # if self.training:
-        if False:
-            targets = dict(zip([inputs[k] for k in ['gt_boxes', 'gt_labels', 'gt_masks'] if k in inputs]))
-            head_losses = self.head_losses(features,box_outs,targets)
+        if self.training:
+        # if True:
+            targets_name = [na for na in self.input_names if na!='image']
+            targets = dict(zip(targets_name,[inputs[na] for na in targets_name]))
+            head_losses = self.head_losses(box_outs,targets)
             
             wd_cost = regularize_cost(
                 '.*/W', l2_regularizer(cfg.TRAIN.WEIGHT_DECAY), name='wd_cost')
@@ -149,7 +153,7 @@ class SigleStageDet(ModelDesc):
             return total_cost
         else:
             result = self.postprocess(box_outs)
-            return result
+            # return result
 
             # Check that the model defines the tensors it declares for inference
             # For existing models, they are defined in "fastrcnn_predictions(name_scope='output')"
@@ -241,10 +245,10 @@ def reppoints_head(feature_map,stride,num_points=9):
         # classify
 
         dcn_offset = pts_out_init_detach - dcn_base_offset
-        cls_feat_dcn = DefConvModule(cls_feat,dcn_offset,128,with_norm=False,act='relu')
+        cls_feat_dcn = DefConvModule(cls_feat,dcn_offset,128,with_norm=False,act='relu',name='cls_refine_dcn')
         cls_out = ConvModule(cls_feat_dcn,cfg.DATA.NUM_CATEGORY,(1,1),with_norm=False,name='cls_out')
 
-        pts_feat_dcn = DefConvModule(pts_feat,dcn_offset,128,with_norm=False,act='relu')
+        pts_feat_dcn = DefConvModule(pts_feat,dcn_offset,128,with_norm=False,act='relu',name='pts_refine_dcn')
         pts_out_refine = ConvModule(pts_feat_dcn,2*9,(1,1),with_norm=False,name='pts_refine')
 
         pts_out_refine = tf.math.add(tf.stop_gradient(pts_out_init),pts_out_refine,name='pts_refine_out')
@@ -316,6 +320,7 @@ def multiclass_nms(pts, scores):
     final_boxes = tf.concat((final_boxes,final_scores),1,name='boxes')
     return final_boxes,final_pts,final_labels
 
+# TODO 文字多边形的点数采用配置文件实现
 class RepPointsFPNDet(SigleStageDet):
 
     def inputs(self):
@@ -323,7 +328,8 @@ class RepPointsFPNDet(SigleStageDet):
             tf.TensorSpec((None, None, 3), tf.float32, 'image')]
         ret.extend([
             tf.TensorSpec((None, 4), tf.float32, 'gt_boxes'),
-            tf.TensorSpec((None,), tf.int64, 'gt_labels')])  # all > 0
+            tf.TensorSpec((None,), tf.int64, 'gt_labels'),
+            tf.TensorSpec((None,), tf.int64, 'is_crowd')])  # all > 0
         if cfg.MODE_MASK:
             ret.append(
                 tf.TensorSpec((None, None, None), tf.uint8, 'gt_masks_packed')
@@ -332,6 +338,12 @@ class RepPointsFPNDet(SigleStageDet):
             ret.append(
                 tf.TensorSpec((None, None, None), tf.float32, 'gt_polygons')
             )
+            for k in range(len(cfg.FPN.STRIDES)):
+                ret.extend([
+                    tf.TensorSpec((None, None, 1), tf.int32,
+                                'point_labels_lvl_{}'.format(k)),
+                    tf.TensorSpec((None, None, 18), tf.float32,
+                                'point_targets_lvl_{}'.format(k))])
         return ret
 
     def backbone(self, image):
@@ -358,21 +370,143 @@ class RepPointsFPNDet(SigleStageDet):
     def head_losses(self,box_outs,targets):
         '''
         Args:
-            box_out: dict(
-                cls_outs: (n,nCls,h,w)
-                pts_init_outs: (n,nP,h,w) [y first]
-                pts_refine_outs: (n,nP,h,w) [y first]
+            box_outs: dict(
+                cls_outs: ((n,nCls,h,w),(n,nCls,h',w'),...)
+                pts_init_outs: ((n,nP,h,w),(n,nP,h',w'),...) [y first]
+                pts_refine_outs: ((n,nP,h,w),(n,nP,h',w'),...) [y first]
             )
             targets: dict(
-                
+                gt_boxes: (n,4)
+                gt_labels: (n,1)
+                gt_polygons: (n,np*2,2),
+                point_labels_lvl_?: (n,h,w,1)
+                point_targets_lvl_?: (n,h,w,18)
             )
         returns:
-            loss: a tensor
+            loss: list of tensor
         '''
-        
-        pass
+        # loss 计算分为两个阶段，对应的GT匹配过程也为两个部分。
+        # 1. 初始匹配不基于预测结果，使用点或anchor进行匹配; 2. 对初始的预测结果进行匹配，进行分类和回归的监督。
 
-    def points_formate(self,pts,y_first=True):
+        featmap_sizes = [[tf.shape(featmap)[2],tf.shape(featmap)[3]] for featmap in box_outs['cls_outs']]
+        # NOTE 另一种选择是这里也使用anchor
+        center_list = self.get_points(featmap_sizes)
+        # decode the prediction
+        pts_coord_init = self.offset_to_pts(center_list,box_outs['pts_init_outs']) # lvl first [(n,h*w,18)...] x first
+        pts_coord_refine = self.offset_to_pts(center_list,box_outs['pts_refine_outs'])
+
+        pts_init_loss = 0.
+        for idx,st in enumerate(cfg.FPN.STRIDES):
+            pts_target_lvl = tf.reshape(targets[f'point_targets_lvl_{idx}'],(1,-1,18)) # (n,h,w,18)
+            pts_label_lvl = tf.reshape(targets[f'point_labels_lvl_{idx}'],(1,-1,1)) # (n,h,w,1)
+
+            weights = tf.cast(tf.greater(pts_label_lvl,0),tf.float32)
+            # pos_idx = tf.where(tf.greater(pts_label_lvl,0))
+
+            # pos_pts_preds_init = tf.gather(pts_coord_init[idx],pos_idx)
+            # pos_pts_targets = tf.gather(pts_target_lvl,pos_idx)
+
+            pts_coord_init_lvl = tf.reshape(pts_coord_init[idx],(1,-1,18))
+            pts_init_lvl_loss = smooth_l1loss(pts_target_lvl,pts_coord_init_lvl,delta=0.11,weights=weights)
+            pts_init_ls= tf.reduce_sum(pts_init_lvl_loss) / (tf.reduce_sum(weights)+1e-6)
+            pts_init_loss += pts_init_ls
+        
+        # 第二阶段loss涉及到匹配
+        cls_loss = 0.
+        pts_refine_loss = 0.
+        # NOTE TODO 再不处理batch > 1的情况，后续支持
+        cls_out_list = box_outs['cls_outs']
+        for idx,st in enumerate(cfg.FPN.STRIDES):
+            pts_coord_init_lvl = tf.reshape(pts_coord_init[idx],(1,-1,9,2))
+            pts_coord_init_lvl_i = pts_coord_init_lvl[0,:,:,:]
+            # pts to bbox(For match)
+            pts_x,pts_y = pts_coord_init_lvl_i[:,:,0] ,pts_coord_init_lvl_i[:,:,1]
+            min_x = tf.reduce_min(pts_x,axis=-1,keepdims=True)
+            max_x = tf.reduce_max(pts_x,axis=-1,keepdims=True)
+            min_y = tf.reduce_min(pts_y,axis=-1,keepdims=True)
+            max_y = tf.reduce_min(pts_y,axis=-1,keepdims=True)
+            boxes_init = tf.concat([min_x,min_y,max_x,max_y],axis=-1)            
+            # boxes_init = self.points_formate(pts_coord_init_lvl,target='box',y_first=False)
+
+            gt_boxes = targets['gt_boxes']
+            gt_labels = tf.cast(targets['gt_labels'],tf.float32)
+            gt_polygons = targets['gt_polygons']
+            assigin_result = match_to_target(boxes_init,gt_boxes,gt_labels)
+
+            pts_xoord_init_lvl_i = tf.reshape(pts_coord_init_lvl_i,(-1,18))
+            poly_targets = self.poly_to_target(gt_polygons)
+            target_labels,target_polygons = assign_to_target(pts_xoord_init_lvl_i,assigin_result,gt_labels,poly_targets)
+
+            # 后续支持batch, 所以保留batch 维度, 对在batch维度进行concat
+            target_labels = tf.reshape(target_labels,(1,-1,1))
+            target_polygons = tf.reshape(target_polygons,(1,-1,18))
+            # loss 计算
+            # 分类采用sigmod focus loss, 回归采用smooth l1 loss
+            cls_out_lvl = cls_out_list[idx]
+            cls_out_lvl = tf.reshape(cls_out_lvl,(1,-1,1))
+            cls_loss_lvl = sigmoid_focalloss(cls_out_lvl,target_labels,gamma=2.0, alpha=0.25)
+            cls_loss_lvl = tf.reduce_sum(cls_out_lvl)
+            cls_loss += cls_loss_lvl
+
+            weights = tf.cast(tf.greater(target_labels,0),tf.float32)
+            pts_coord_refine_lvl = tf.reshape(pts_coord_refine[idx],(1,-1,18))
+            pts_refine_ls = smooth_l1loss(target_polygons,pts_coord_refine_lvl,delta=0.11,weights=weights)
+            pts_refine_ls= tf.reduce_sum(pts_refine_ls) / (tf.reduce_sum(weights)+1e-6)
+            pts_refine_loss+=pts_refine_ls
+        
+        # print(pts_init_loss,cls_loss,pts_refine_loss)
+        # TODO 将各部分loss 添加至summary
+        return [pts_init_loss,cls_loss,pts_refine_loss]
+
+    def poly_to_target(self,polygons):
+        upper=polygons[:,0:4,:]
+        downer= tf.reverse(polygons[:,4:8,:],(1,))
+        center=(tf.reduce_mean(upper[:,1:3,:],axis=1,keepdims=True)+tf.reduce_mean(downer[:,1:3,:],axis=1,keepdims=True))/2
+
+        trans_poly=tf.concat((upper,center,downer),axis=1)
+        return tf.reshape(trans_poly,(-1,18))
+
+    def offset_to_pts(self,center_list,pred_list):
+        """Change from point offset to point coordinate.
+        """
+        pts_list = []
+        for i_lvl in range(len(cfg.FPN.STRIDES)):
+            pts_lvl = []
+            # for i_img in range(len(center_list)):
+            # TODO batch 维度处理，在batch数不确定时，需要使用tf loop
+            for i_img in range(1):
+                pts_center = tf.reshape(center_list[i_lvl][:, :2],(-1,1, 2))
+    
+                pts_shift = pred_list[i_lvl][i_img,:,:,:]
+                yx_pts_shift = tf.reshape(tf.transpose(pts_shift,perm=(1,2,0)),(-1,9,2))
+
+                y_pts_shift = yx_pts_shift[:,:, 0]
+                x_pts_shift = yx_pts_shift[:,:, 1]
+                xy_pts_shift = tf.stack([x_pts_shift, y_pts_shift], -1)
+                xy_pts_shift = tf.reshape(xy_pts_shift,(-1, 9,2))
+                pts = xy_pts_shift * cfg.FPN.STRIDES[i_lvl] + pts_center
+                pts_lvl.append(pts)
+            pts_lvl = tf.stack(pts_lvl, 0)
+            pts_list.append(pts_lvl)
+        return pts_list
+
+    def get_points(self,featmap_sizes):
+        '''根据特征尺寸生成栅格点
+        '''
+        num_levels = len(featmap_sizes)
+        strides = (8,16,32)
+
+        mlvl_points = []
+        for i in range(num_levels):
+            pg = PointGenerator()
+            points=pg.grid_points(featmap_sizes[i][0],featmap_sizes[i][1],strides[i])
+            mlvl_points.append(points)
+        
+        # 对于batch 模式，需要生成多个图像的，并且需要使用标志位确定图像的有效区域
+        return mlvl_points
+        
+
+    def points_formate(self,pts,target='pts',y_first=True):
         shape = tf.shape(pts)
         pts_reshape =  tf.reshape(pts,(shape[0],-1,2,shape[2],shape[3]))
         pts_y = pts_reshape[:, :, 0, ...] if y_first else pts_reshape[:, :, 1,:,:]
@@ -381,6 +515,7 @@ class RepPointsFPNDet(SigleStageDet):
         pts = tf.stack((pts_x,pts_y),axis=2)
         pts = tf.reshape(pts,[tf.shape(pts)[0],-1,tf.shape(pts)[3],tf.shape(pts)[4]])
         return pts
+
 
     def postprocess(self,bbox_head_outs):
         '''
@@ -433,43 +568,66 @@ class RepPointsFPNDet(SigleStageDet):
 
             det_boxs,det_pts,det_labels = multiclass_nms(mlvl_pts,mlvl_scores)
 
+            det_boxs = tf.identity(det_boxs, name="output/boxes")
+            det_pts = tf.identity(det_pts, name="output/polygons")
+            det_labels = tf.identity(det_labels, name="output/labels")
+
             result.append([det_boxs,det_pts,det_labels])
         return result
 
 if __name__ == "__main__":
     import faulthandler; faulthandler.enable()
     import os 
+    from dataset.dataset import DatasetRegistry
+
     os.environ["CUDA_VISIBLE_DEVICES"]='2'
-    # tf.enable_eager_execution()
-    tf.disable_eager_execution()
+
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    tf.enable_eager_execution(config=config)
+    # tf.disable_eager_execution()
     # import crash_on_ipy
     # with tf.device('/gpu:0'):
     from config import finalize_configs
     from dataset import register_text
+    
+    # import config as cfg
+
+    from data import TrainingDataPreprocessor
 
     # from keras import backend as K
     # K.set_session(sess)
 
-    register_text('/home/lupu/27_screenshot/LSVT')
+    register_text('/home/lupu/27_screenshot/MLT_2017/')
     finalize_configs(True)
     
     model = RepPointsFPNDet()
-    image = tf.placeholder(shape=[None,None,3],dtype=tf.float32)
-    # image = np.random.rand(640,640,3)*255
-    # image = tf.Variable(image,dtype=tf.float32)
+    # image = tf.placeholder(shape=[None,None,3],dtype=tf.float32)
 
-    box_outs = model.build_graph(image)
-    print(box_outs)
-    init = tf.initialize_all_variables()
+    preprocess = TrainingDataPreprocessor(cfg)
+    
+    roidbs = DatasetRegistry.get('text_train').training_roidbs()
+
+    for i in range(10):
+        inputs = preprocess(roidbs[0])
+
+        print([v.shape for v in list(inputs.values())])
+        inputs = [tf.Variable(v,dtype=tf.float32) for v in list(inputs.values())]
+
+        # image = np.random.rand(640,640,3)*255
+        # image = tf.Variable(inputs,dtype=tf.float32)
+        box_outs = model.build_graph(*inputs)
     # print(box_outs)
-    sess = tf.Session()
-    with tf.Session() as sess:
-        sess.run(init)
-        sess.run(box_outs, feed_dict={image: np.ones((700,700,3),dtype=np.int32)})  
-        import time
-        t0=time.time()
-        for i in range(10):
-            ss = (600+i*10,600+i*10,3)
-            # ss = (700,700,3)
-            result = sess.run(box_outs, feed_dict={image: np.random.randint(255,size=ss)})
-        print((time.time()-t0)/10)
+    # init = tf.initialize_all_variables()
+    # # print(box_outs)
+    # sess = tf.Session()
+    # with tf.Session() as sess:
+    #     sess.run(init)
+    #     sess.run(box_outs, feed_dict={image: np.ones((700,700,3),dtype=np.int32)})  
+    #     import time
+    #     t0=time.time()
+    #     for i in range(10):
+    #         ss = (600+i*10,600+i*10,3)
+    #         # ss = (700,700,3)
+    #         result = sess.run(box_outs, feed_dict={image: np.random.randint(255,size=ss)})
+    #     print((time.time()-t0)/10)

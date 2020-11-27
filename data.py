@@ -186,7 +186,7 @@ class TrainingDataPreprocessor:
             # 在数据预处理阶段生成GT, 在训练过程中会稍微复杂点
             mlvl_points_inputs = self.get_point_target(im,boxes,polygons,is_crowd,strides)
             for i, (point_labels,point_targets) in enumerate(mlvl_points_inputs):
-                ret[f'point_label_lvl_{i}'] = point_labels
+                ret[f'point_labels_lvl_{i}'] = point_labels
                 ret[f'point_targets_lvl_{i}'] = point_targets
 
         # from viz import draw_annotation, draw_mask
