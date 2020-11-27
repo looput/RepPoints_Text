@@ -5,6 +5,7 @@
 - GCC 版本 7 (GCC 5.4 是不行的)
 - Office reference [custome-op](https://github.com/tensorflow/custom-op)
 - GCC 7编译出的版本session 执行segmentation 错误 (错误为layers\dcn\deformable_conv2d.cpp 中InferenceContext *c 为空)
+- ldd *.s0 查看动态链接库的依赖
 
 ## Session 可以使用的版本
 - gcc 使用 4.8 [TF-编译对应版本](https://www.tensorflow.org/install/source#linux) [cmake 指定版本](https://stackoverflow.com/questions/17275348/how-to-specify-new-gcc-path-for-cmake)
