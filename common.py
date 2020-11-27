@@ -61,6 +61,41 @@ class CustomResize(ImageAugmentor):
         newh = int(newh + 0.5)
         return ResizeTransform(h, w, newh, neww, self.interp)
 
+class Random_Resize(ImageAugmentor):
+    ''' 图片的尺寸应能整除一些数字
+    '''
+    def __init__(self, short_edge_length, max_size,divs=32, interp=cv2.INTER_LINEAR):
+        """
+        Args:
+            short_edge_length ([int, int]): a [min, max] interval from which to sample the
+                shortest edge length.
+            max_size (int): maximum allowed longest edge length.
+        """
+        super(Random_Resize, self).__init__()
+        self.divs = divs
+        if isinstance(short_edge_length, int):
+            short_edge_length = (short_edge_length, short_edge_length)
+        self._init(locals())
+
+    def get_transform(self, img):
+        h, w = img.shape[:2]
+        size = self.rng.randint(
+            self.short_edge_length[0], self.short_edge_length[1] + 1)
+        scale = size * 1.0 / min(h, w)
+        if h < w:
+            newh, neww = size, scale * w
+        else:
+            newh, neww = scale * h, size
+        if max(newh, neww) > self.max_size:
+            scale = self.max_size * 1.0 / max(newh, neww)
+            newh = newh * scale
+            neww = neww * scale
+        neww = int(neww + 0.5)
+        newh = int(newh + 0.5)
+        
+        neww = ((neww+self.divs-1)//self.divs)*self.divs
+        newh = ((newh+self.divs-1)//self.divs)*self.divs
+        return ResizeTransform(h, w, newh, neww, self.interp)
 
 def box_to_point4(boxes):
     """
