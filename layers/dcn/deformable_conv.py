@@ -3,6 +3,7 @@ import os.path as osp
 from tensorflow.python.framework import ops
 import tensorflow.keras as keras
 import math
+from tensorpack.models.common import VariableHolder, layer_register
 
 filename = osp.join(osp.dirname(__file__), 'deformable_conv2d.so')
 deformable_conv2d_module = tf.load_op_library(filename)
@@ -78,7 +79,7 @@ def _deformable_conv2d_back_prop(op, grad):
     return data_grad  # List of 4 Tensor, since we have 4 input
 
 
-class DeformableConv2D(keras.layers.Layer):
+class DeformableConv2D_l(keras.layers.Layer):
     def __init__(self, filters, kernel_size=(3, 3), num_groups=1, deformable_groups=1, strides=(1, 1, 1, 1), im2col=1,
                  use_bias=False, padding="VALID", data_format='NCHW', dilations=(1, 1, 1, 1)):
         super(DeformableConv2D, self).__init__()
@@ -99,7 +100,13 @@ class DeformableConv2D(keras.layers.Layer):
         height,width = input_shape[2:]
         
         # self.mask = tf.constant(1., shape=[1, kernel_h * kernel_w, height, width])
-        self.filter = tf.Variable(initial_value=tf.random.normal(shape=[self.filters, channel, self.kernel_size[0], self.kernel_size[1]]))
+        # self.filter = tf.Variable(initial_value=tf.random.normal(shape=[self.filters, channel, self.kernel_size[0], self.kernel_size[1]]))
+        # New TRAINABLE_VARIABLES shouldn't be created in tower-pred-0
+        # https://tensorpack.readthedocs.io/tutorial/extend/trainer.html
+        self.filter = tf.get_variable(
+            name='filter',
+            initializer=tf.random.normal(shape=[self.filters, channel, self.kernel_size[0], self.kernel_size[1]]),\
+                trainable=True)
         self.built = True
 
     def call(self, x,offset, **kwargs):
@@ -126,6 +133,32 @@ class DeformableConv2D(keras.layers.Layer):
             data_format=self.data_format,
             dilations=self.dilations)
         return result
+
+@layer_register(log_shape=True)
+def DeformableConv2D(x,offset,filters, kernel_size=(3, 3), num_groups=1, deformable_groups=1, strides=(1, 1, 1, 1), im2col=1,
+                 use_bias=False, padding="VALID", data_format='NCHW', dilations=(1, 1, 1, 1)):
+    filter_var = tf.get_variable(
+        name='W',
+        shape = [filters, x.get_shape().as_list()[1], kernel_size[0], kernel_size[1]],
+        # initializer=tf.random.normal(shape=[filters, tf.shape(x)[1], kernel_size[0], kernel_size[1]]),\
+            trainable=True)
+    # 这里mask 并不能直接，因为形状是跟输入有关的
+    mask = tf.math.reduce_mean(offset,axis=1,keepdims=True)*0+1.
+    mask = tf.tile(mask,(1,kernel_size[0]*kernel_size[0],1,1))
+    result = deformable_conv2d_module.deformable_conv2d(
+        input=x,
+        filter=filter_var,
+        offset=offset,
+        mask=mask,
+        strides=strides,
+        num_groups=num_groups,
+        deformable_groups=deformable_groups,
+        im2col_step=im2col,
+        no_bias=(not use_bias),
+        padding=padding,
+        data_format=data_format,
+        dilations=dilations)
+    return result
 
 if __name__ == '__main__':
     tf.enable_eager_execution()
