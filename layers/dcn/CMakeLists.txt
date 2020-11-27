@@ -12,7 +12,6 @@ set(CMAKE_CXX_FLAGS -D_GLIBCXX_USE_CXX11_ABI=0)
 
 
 # set(TF_INCLUDE_PATH /home/dl/anaconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/include)
-# set(TF_INCLUDE_PATH /home/dl/anaconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/include)
 set(TF_INCLUDE_PATH /data/lupu/miniconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/include)
 # set(TF_INCLUDE_PATH /home/dl/anaconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/include/third_party/gpus)
 
