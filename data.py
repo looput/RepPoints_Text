@@ -18,15 +18,16 @@ from tensorpack.utils.argtools import log_once
 from modeling.model_rpn import get_all_anchors
 from modeling.model_fpn import get_all_anchors_fpn
 from common import (
-    CustomResize, DataFromListOfDict, box_to_point4,
+    CustomResize,Random_Resize ,DataFromListOfDict, box_to_point4,
     filter_boxes_inside_shape, np_iou, point4_to_box, polygons_to_mask,
 )
 from config import config as cfg
 from dataset import DatasetRegistry, register_coco, register_text
 from utils.np_box_ops import area as np_area
 from utils.np_box_ops import ioa as np_ioa
+from utils.polygons import expand_point
 
-# import tensorpack.utils.viz as tpviz
+import tensorpack.utils.viz as tpviz
 
 
 class MalformedData(BaseException):
@@ -73,7 +74,8 @@ class TrainingDataPreprocessor:
     def __init__(self, cfg):
         self.cfg = cfg
         self.aug = imgaug.AugmentorList([
-            CustomResize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE),
+            # CustomResize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE),
+            Random_Resize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE),
             imgaug.Flip(horiz=True)
         ])
 
@@ -104,24 +106,28 @@ class TrainingDataPreprocessor:
             assert np.min(np_area(boxes)) > 0, "Some boxes have zero area!"
 
         ret = {"image": im}
+        ret['gt_boxes'] = boxes
+        ret['gt_labels'] = klass
+        ret['is_crowd'] = is_crowd
+        # 无需anchor
         # Add rpn data to dataflow:
-        try:
-            if self.cfg.MODE_FPN:
-                multilevel_anchor_inputs = self.get_multilevel_rpn_anchor_input(im, boxes, is_crowd)
-                for i, (anchor_labels, anchor_boxes) in enumerate(multilevel_anchor_inputs):
-                    ret["anchor_labels_lvl{}".format(i + 2)] = anchor_labels
-                    ret["anchor_boxes_lvl{}".format(i + 2)] = anchor_boxes
-            else:
-                ret["anchor_labels"], ret["anchor_boxes"] = self.get_rpn_anchor_input(im, boxes, is_crowd)
+        # try:
+        #     if self.cfg.MODE_FPN:
+        #         multilevel_anchor_inputs = self.get_multilevel_rpn_anchor_input(im, boxes, is_crowd)
+        #         for i, (anchor_labels, anchor_boxes) in enumerate(multilevel_anchor_inputs):
+        #             ret["anchor_labels_lvl{}".format(i + 2)] = anchor_labels
+        #             ret["anchor_boxes_lvl{}".format(i + 2)] = anchor_boxes
+        #     else:
+        #         ret["anchor_labels"], ret["anchor_boxes"] = self.get_rpn_anchor_input(im, boxes, is_crowd)
 
-            boxes = boxes[is_crowd == 0]  # skip crowd boxes in training target
-            klass = klass[is_crowd == 0]
-            ret["gt_boxes"] = boxes
-            ret["gt_labels"] = klass
-        except MalformedData as e:
-            log_once("Input {} is filtered for training: {}".format(fname, str(e)), "warn")
-            return None
-
+        #     boxes = boxes[is_crowd == 0]  # skip crowd boxes in training target
+        #     klass = klass[is_crowd == 0]
+        #     ret["gt_boxes"] = boxes
+        #     ret["gt_labels"] = klass
+        # except MalformedData as e:
+        #     log_once("Input {} is filtered for training: {}".format(fname, str(e)), "warn")
+        #     return None
+        
         if self.cfg.MODE_MASK:
             # augmentation will modify the polys in-place
             segmentation = copy.deepcopy(roidb["segmentation"])
@@ -153,6 +159,40 @@ class TrainingDataPreprocessor:
             # for mask in masks:
             #     viz = draw_mask(viz, mask)
             # tpviz.interactive_imshow(viz)
+        if self.cfg.MODE_POLYGON:
+            segmentation = copy.deepcopy(roidb["segmentation"]) # [[[np,2]],[[np,2]]]
+            segmentation = [segmentation[k] for k in range(len(segmentation)) if not is_crowd[k]]
+            assert len(segmentation) == len(boxes)
+
+            polygons = []
+            for polys in segmentation:
+                polys = [tfms.apply_coords(p) for p in polys]
+                # 对于文字而言，每个实例采用一个多边形表示
+                polygons.append(polys[0])
+            
+            # 注意到polygonsd的点数并不一定保持一致，因此需要预处理
+
+            polygons = [expand_point(pl,num_exp=4) for pl in polygons]
+            if len(polygons):
+                polygons = np.stack(polygons,axis=0)
+                polygons = polygons.reshape(polygons.shape[0],-1,2)
+            else:
+                polygons = np.zeros((0,8,2),dtype=np.float32)
+            # TODO 这个poolygons 的形式的变换移动到
+            ret['gt_polygons'] = polygons
+
+            # TODO 将target 生成的代码移动到模型的代码部分，并且由配置文件来管理这些target
+            strides = (8,16,32)
+            # 在数据预处理阶段生成GT, 在训练过程中会稍微复杂点
+            mlvl_points_inputs = self.get_point_target(im,boxes,polygons,is_crowd,strides)
+            for i, (point_labels,point_targets) in enumerate(mlvl_points_inputs):
+                ret[f'point_label_lvl_{i}'] = point_labels
+                ret[f'point_targets_lvl_{i}'] = point_targets
+
+        # from viz import draw_annotation, draw_mask
+        # viz = draw_annotation(im, boxes, klass)
+        # tpviz.interactive_imshow(viz)
+
         return ret
 
     def get_rpn_anchor_input(self, im, boxes, is_crowd):
@@ -323,6 +363,83 @@ class TrainingDataPreprocessor:
         # assert len(fg_inds) + np.sum(anchor_labels == 0) == self.cfg.RPN.BATCH_PER_IM
         return anchor_labels, anchor_boxes
 
+    def get_point_target(self,im,gt_bboxes,gt_polygons,is_crowd,strides=[8]):
+        """
+        Args:
+            im: an image
+            boxes: nx4, floatbox, gt. shoudn't be changed
+            polygons: nxnpx2, float polygon
+            is_crowd: n,
+
+        Returns:
+            [(fm_labels, fm_boxes)]: Returns a tuple for each FPN level.
+            Each tuple contains the anchor labels and target boxes for each pixel in the featuremap.
+
+            fm_labels: fHxfWx nCls
+            fm_labels_weight: fHxfWx 1
+            fm_polygons: fHxfWx (np*2)
+            fm_polygons_weight: fHxfWx (np*2)
+        """
+        gt_bboxes = gt_bboxes.copy()
+        gt_polygons = gt_polygons.copy()
+
+        gt_polygons  = polygon_tranform(gt_polygons) # (n,8,2),(n,9,2)
+        # import pudb; pudb.set_trace()
+        # multi lvl
+        im_h,im_w = im.shape[:2]
+        candidate_list = []
+        for stride in strides:
+            shift_x = np.arange(0., im_w//stride) * stride
+            shift_y = np.arange(0., im_h//stride) * stride
+            shift_xx, shift_yy = np.meshgrid(shift_x, shift_y)
+            st = np.ones_like(shift_xx)*stride
+            candidate = np.stack((shift_xx,shift_yy,st),axis=2)
+            candidate_list.append(candidate)
+        
+        lvl_min, lvl_max = np.log2(min(strides)), np.log2(max(strides))
+        # assign gt box
+        gt_bboxes_xy = (gt_bboxes[:, :2] + gt_bboxes[:, 2:]) / 2
+        gt_bboxes_wh = (gt_bboxes[:, 2:] - gt_bboxes[:, :2]).clip(1e-6)
+        scale = 4 # TODO 写到cfg里面
+        gt_bboxes_lvl = ((np.log2(gt_bboxes_wh[:, 0] / scale) +
+                          np.log2(gt_bboxes_wh[:, 1] / scale)) / 2).astype(np.int32)
+        gt_bboxes_lvl = np.clip(gt_bboxes_lvl, int(lvl_min), int(lvl_max))
+        gt_bboxes_lvl = gt_bboxes_lvl-int(lvl_min)
+
+        labels_list = [np.zeros(can.shape[0]*can.shape[1],dtype=np.float32) for can in candidate_list]
+        targets_list = [np.zeros((can.shape[0]*can.shape[1],18),dtype=np.float32) for can in candidate_list]
+
+        for b_idx,(box,poly,crowd) in enumerate(zip(gt_bboxes,gt_polygons,is_crowd)):
+            lvl = gt_bboxes_lvl[b_idx]
+            
+            lvl_points = candidate_list[lvl][:,:,:2] # (fh,fw,2)
+            lvl_points = lvl_points.reshape(-1,2)
+
+            gt_point = gt_bboxes_xy[b_idx]
+            gt_wh = gt_bboxes_wh[b_idx]
+            gt_poly = gt_polygons[b_idx]
+
+            point_gt_dist = np.linalg.norm((lvl_points-gt_point[np.newaxis,:])/gt_wh[np.newaxis,:],axis=1)
+            min_index = np.argmin(point_gt_dist)
+            # 对于crowd样本直接忽略
+            labels_list[lvl][min_index]=b_idx if crowd==0 else -1
+            # 对gt_poly 要进行一定的变换，使之从原始的GT转换到一定的格式
+            # gt_poly_trans = transform(gt_poly)
+            targets_list[lvl][min_index] = gt_poly.reshape(-1)
+        
+
+        labels_list = [lab.reshape(can.shape[0],can.shape[1],-1) for lab,can in zip(labels_list,candidate_list)]
+        targets_list = [tar.reshape(can.shape[0],can.shape[1],-1) for tar,can in zip(targets_list,candidate_list)]
+        # TODO 对权重进行支持
+        return zip(labels_list,targets_list)
+
+def polygon_tranform(polygons):
+    upper=polygons[:,0:4,:]
+    downer=np.flip(polygons[:,4:8,:],axis=(1,))
+    center=(upper[:,1:3,:].mean(axis=1,keepdims=True)+downer[:,1:3,:].mean(axis=1,keepdims=True))/2
+
+    trans_poly=np.concatenate((upper,center,downer),axis=1).reshape(polygons.shape[0],-1,2)
+    return trans_poly
 
 def get_train_dataflow():
     """
@@ -338,6 +455,7 @@ def get_train_dataflow():
     gt_labels: (N,)
 
     If MODE_MASK, gt_masks: (N, h, w)
+    if MODE_POLYGON, gt_polygons: (N,2*np)
     """
     roidbs = list(itertools.chain.from_iterable(DatasetRegistry.get(x).training_roidbs() for x in cfg.DATA.TRAIN))
     print_class_histogram(roidbs)
@@ -402,7 +520,7 @@ if __name__ == "__main__":
     from config import finalize_configs
 
     # register_coco(os.path.expanduser("~/data/coco"))
-    register_text('/home/lupu/27_screenshot/LSVT')
+    register_text('/home/lupu/27_screenshot/MLT_2017/')
     finalize_configs(True)
     ds = get_train_dataflow()
     ds = PrintData(ds, 10)
