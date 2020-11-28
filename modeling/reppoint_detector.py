@@ -428,7 +428,7 @@ class RepPointsFPNDet(SigleStageDet):
             min_x = tf.reduce_min(pts_x,axis=-1,keepdims=True)
             max_x = tf.reduce_max(pts_x,axis=-1,keepdims=True)
             min_y = tf.reduce_min(pts_y,axis=-1,keepdims=True)
-            max_y = tf.reduce_min(pts_y,axis=-1,keepdims=True)
+            max_y = tf.reduce_max(pts_y,axis=-1,keepdims=True)
             boxes_init = tf.concat([min_x,min_y,max_x,max_y],axis=-1)            
             # boxes_init = self.points_formate(pts_coord_init_lvl,target='box',y_first=False)
 
