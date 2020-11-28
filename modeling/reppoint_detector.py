@@ -128,6 +128,9 @@ class SigleStageDet(ModelDesc):
             out.append('output/polygons')
         return ['image'], out
 
+    # def training():
+    #     return True
+        
     def build_graph(self, *inputs):
         inputs = dict(zip(self.input_names, inputs))
         # if "gt_masks_packed" in inputs:
@@ -241,7 +244,7 @@ def reppoints_head(feature_map,stride,num_points=9):
         pts_out_init = ConvModule(x,18,with_norm=False,act='',name='pts_init_out')# [b,2n,h,w]
 
         gradient_mul = 0.1
-        pts_out_init_detach = tf.stop_gradient(pts_out_init)*(1-gradient_mul)+pts_out_init
+        pts_out_init_detach = tf.stop_gradient(pts_out_init)*(1-gradient_mul)+pts_out_init*gradient_mul
         # classify
 
         dcn_offset = pts_out_init_detach - dcn_base_offset
@@ -354,7 +357,7 @@ class RepPointsFPNDet(SigleStageDet):
     def box_head(self, image, features):
         # Multi-Level RPN Proposals]
         # strides = cfg.BOX_HEAD.STRIDES
-        strides = (8,16,32)
+        strides = cfg.FPN.STRIDES
         reppoint_outputs = [reppoints_head(pi,stride) for pi,stride in zip(features,strides)]
 
         mlvl_cls_out = [k[0] for k in reppoint_outputs]
@@ -395,7 +398,7 @@ class RepPointsFPNDet(SigleStageDet):
         pts_coord_init = self.offset_to_pts(center_list,box_outs['pts_init_outs']) # lvl first [(n,h*w,18)...] x first
         pts_coord_refine = self.offset_to_pts(center_list,box_outs['pts_refine_outs'])
 
-        pts_init_loss = 0.
+        pts_init_loss = []
         for idx,st in enumerate(cfg.FPN.STRIDES):
             pts_target_lvl = tf.reshape(targets[f'point_targets_lvl_{idx}'],(1,-1,18)) # (n,h,w,18)
             pts_label_lvl = tf.reshape(targets[f'point_labels_lvl_{idx}'],(1,-1,1)) # (n,h,w,1)
@@ -407,13 +410,14 @@ class RepPointsFPNDet(SigleStageDet):
             # pos_pts_targets = tf.gather(pts_target_lvl,pos_idx)
 
             pts_coord_init_lvl = tf.reshape(pts_coord_init[idx],(1,-1,18))
-            pts_init_lvl_loss = smooth_l1loss(pts_target_lvl,pts_coord_init_lvl,delta=0.11,weights=weights)
+            pts_init_lvl_loss = smooth_l1loss(pts_target_lvl/float(st),pts_coord_init_lvl/float(st),delta=0.11,weights=weights)
             pts_init_ls= tf.reduce_sum(pts_init_lvl_loss) / (tf.reduce_sum(weights)+1e-6)
-            pts_init_loss += pts_init_ls
+            pts_init_loss.append(pts_init_ls)
+        pts_init_loss=tf.add_n(pts_init_loss,name='loss/pts_init_loss')
         
         # 第二阶段loss涉及到匹配
-        cls_loss = 0.
-        pts_refine_loss = 0.
+        cls_loss = []
+        pts_refine_loss = []
         # NOTE TODO 再不处理batch > 1的情况，后续支持
         cls_out_list = box_outs['cls_outs']
         for idx,st in enumerate(cfg.FPN.STRIDES):
@@ -446,17 +450,21 @@ class RepPointsFPNDet(SigleStageDet):
             cls_out_lvl = tf.reshape(cls_out_lvl,(1,-1,1))
             cls_loss_lvl = sigmoid_focalloss(cls_out_lvl,target_labels,gamma=2.0, alpha=0.25)
             cls_loss_lvl = tf.reduce_sum(cls_out_lvl)
-            cls_loss += cls_loss_lvl
+            cls_loss.append(cls_loss_lvl) 
 
             weights = tf.cast(tf.greater(target_labels,0),tf.float32)
             pts_coord_refine_lvl = tf.reshape(pts_coord_refine[idx],(1,-1,18))
-            pts_refine_ls = smooth_l1loss(target_polygons,pts_coord_refine_lvl,delta=0.11,weights=weights)
+            pts_refine_ls = smooth_l1loss(target_polygons/float(st),pts_coord_refine_lvl/float(st),delta=0.11,weights=weights)
             pts_refine_ls= tf.reduce_sum(pts_refine_ls) / (tf.reduce_sum(weights)+1e-6)
-            pts_refine_loss+=pts_refine_ls
+            pts_refine_loss.append(pts_refine_ls)
+        
+        cls_loss =tf.add_n(cls_loss,name='loss/cls_loss')
+        pts_refine_loss=tf.add_n(pts_refine_loss,name='loss/pts_refine_loss')
         
         # print(pts_init_loss,cls_loss,pts_refine_loss)
         # TODO 将各部分loss 添加至summary
-        return [pts_init_loss,cls_loss,pts_refine_loss]
+        add_moving_summary(pts_init_loss,cls_loss,pts_refine_loss)
+        return [pts_init_loss*0.25,cls_loss,pts_refine_loss*0.5]
 
     def poly_to_target(self,polygons):
         upper=polygons[:,0:4,:]
@@ -494,8 +502,7 @@ class RepPointsFPNDet(SigleStageDet):
         '''根据特征尺寸生成栅格点
         '''
         num_levels = len(featmap_sizes)
-        strides = (8,16,32)
-
+        strides = cfg.FPN.STRIDES
         mlvl_points = []
         for i in range(num_levels):
             pg = PointGenerator()
