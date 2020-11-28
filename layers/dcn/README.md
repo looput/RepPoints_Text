@@ -13,3 +13,4 @@
 - set(CMAKE_BUILD_TYPE RelWithDebInfo) 配合gdb python使用，对*.so的报错进行定位和调试
 - target_link_libraries 不正确话会提示 cmake_link.o失败
 - 参考 [](http://3ms.huawei.com/km/blogs/details/7872031) [](https://github.com/tensorflow/tensorflow/issues/30494)
+- cmake -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON . 在make阶段显示具体命令
