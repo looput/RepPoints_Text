@@ -137,10 +137,12 @@ class DeformableConv2D_l(keras.layers.Layer):
 @layer_register(log_shape=True)
 def DeformableConv2D(x,offset,filters, kernel_size=(3, 3), num_groups=1, deformable_groups=1, strides=(1, 1, 1, 1), im2col=1,
                  use_bias=False, padding="VALID", data_format='NCHW', dilations=(1, 1, 1, 1)):
+    # TODO initializer 添加接口
     filter_var = tf.get_variable(
         name='W',
         shape = [filters, x.get_shape().as_list()[1], kernel_size[0], kernel_size[1]],
-        # initializer=tf.random.normal(shape=[filters, tf.shape(x)[1], kernel_size[0], kernel_size[1]]),\
+        initializer=tf.variance_scaling_initializer(scale=2.0, mode='fan_out',
+                      distribution='untruncated_normal'),\
             trainable=True)
     # 这里mask 并不能直接，因为形状是跟输入有关的
     mask = tf.math.reduce_mean(offset,axis=1,keepdims=True)*0+1.
