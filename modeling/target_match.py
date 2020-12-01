@@ -53,7 +53,7 @@ def match_to_target(boxes, gt_boxes, gt_labels):
                 It contains the matching GT of each foreground roi.
     """
     iou = pairwise_iou(boxes, gt_boxes)     # nxm
-    # proposal_metrics(iou)
+    proposal_metrics(iou)
 
     # add ground truth as proposals as well
     # boxes = tf.concat([boxes, gt_boxes], axis=0)    # (n+m) x 4

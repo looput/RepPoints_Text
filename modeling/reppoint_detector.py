@@ -140,14 +140,14 @@ class SigleStageDet(ModelDesc):
         image = self.preprocess(inputs['image'])     # 1CHW
 
         features = self.backbone(image)[1:4]
-        box_outs = self.box_head(image,features)
+        box_outs = self.box_head(features)
 
         if self.training:
         # if True:
             targets_name = [na for na in self.input_names if na!='image']
             targets = dict(zip(targets_name,[inputs[na] for na in targets_name]))
             head_losses = self.head_losses(box_outs,targets)
-            
+            # return tf.add_n(head_losses,'total_cost')
             wd_cost = regularize_cost(
                 '.*/W', l2_regularizer(cfg.TRAIN.WEIGHT_DECAY), name='wd_cost')
             total_cost = tf.add_n(
@@ -190,7 +190,7 @@ class RepPointsC4Det(ModelDesc):
     def box_head(self, image, features):
         # Multi-Level RPN Proposals]
         # strides = cfg.BOX_HEAD.STRIDES
-        strides = (8,16,32)
+        strides = cfg.FPN.STRIDES
         reppoint_outputs = [reppoints_head(pi,stride) for pi,stride in zip(features,strides)]
 
         mlvl_cls_out = [k[0] for k in reppoint_outputs]
@@ -229,7 +229,7 @@ def reppoints_head(feature_map,stride,num_points=9):
             pts_refine: [batch,(y1, x1, y2, x2, ...), H, W] 二次回归的目标框的偏移量
     """
     with tf.variable_scope("reppoints_head", reuse=tf.AUTO_REUSE) as scope:
-        dcn_base_offset = _init_dcn_offset(9)
+        dcn_base_offset = _init_dcn_offset(num_points)
 
         cls_feat = feature_map
         pts_feat = feature_map
@@ -241,7 +241,7 @@ def reppoints_head(feature_map,stride,num_points=9):
             pts_feat = ConvModule(pts_feat,256,name=f'pts_conv_{i}')
 
         x = ConvModule(pts_feat,256,with_norm=False,act='relu',name='pts_init_conv')
-        pts_out_init = ConvModule(x,18,with_norm=False,act='',name='pts_init_out')# [b,2n,h,w]
+        pts_out_init = ConvModule(x,2*num_points,with_norm=False,act='',name='pts_init_out')# [b,2n,h,w]
 
         gradient_mul = 0.1
         pts_out_init_detach = tf.stop_gradient(pts_out_init)*(1-gradient_mul)+pts_out_init*gradient_mul
@@ -252,7 +252,7 @@ def reppoints_head(feature_map,stride,num_points=9):
         cls_out = ConvModule(cls_feat_dcn,cfg.DATA.NUM_CATEGORY,(1,1),with_norm=False,name='cls_out')
 
         pts_feat_dcn = DefConvModule(pts_feat,dcn_offset,128,with_norm=False,act='relu',name='pts_refine_dcn')
-        pts_out_refine = ConvModule(pts_feat_dcn,2*9,(1,1),with_norm=False,name='pts_refine')
+        pts_out_refine = ConvModule(pts_feat_dcn,2*num_points,(1,1),with_norm=False,name='pts_refine')
 
         pts_out_refine = tf.math.add(tf.stop_gradient(pts_out_init),pts_out_refine,name='pts_refine_out')
 
@@ -354,7 +354,7 @@ class RepPointsFPNDet(SigleStageDet):
         p23456 = fpn_model('fpn', c2345)
         return p23456
 
-    def box_head(self, image, features):
+    def box_head(self, features):
         # Multi-Level RPN Proposals]
         # strides = cfg.BOX_HEAD.STRIDES
         strides = cfg.FPN.STRIDES
@@ -532,7 +532,7 @@ class RepPointsFPNDet(SigleStageDet):
                 pts_init_outs: [(N,np*2,h,w),(N,np*2,h,w),..]  
                 pts_refine_outs: [(N,np*2,h,w),(N,np*2,h,w),..]
         '''
-        strides = (8,16,32)
+        strides = cfg.FPN.STRIDES
         cls_outs = bbox_head_outs['cls_outs']
         pts_refine_outs = bbox_head_outs['pts_refine_outs']
 
@@ -599,9 +599,10 @@ if __name__ == "__main__":
     from dataset import register_text
     
     # import config as cfg
-
     from data import TrainingDataPreprocessor
-
+    import cv2
+    import matplotlib.pyplot as plt
+    from tensorpack.utils import viz as tviz
     # from keras import backend as K
     # K.set_session(sess)
 
@@ -616,14 +617,30 @@ if __name__ == "__main__":
     roidbs = DatasetRegistry.get('text_train').training_roidbs()
 
     for i in range(10):
-        inputs = preprocess(roidbs[0])
+        inputs = preprocess(roidbs[i+10])
+        # import viz
+        # img = viz.draw_annotation(inputs['image'],inputs['gt_boxes'],inputs['gt_labels'],inputs['gt_polygons'].reshape(-1,16))
+        # plt.imshow(img)
+        # for i in range(3):
+        #     plt.figure(f'point_labels_lvl_{i}')
+        #     plt.imshow(inputs[f'point_labels_lvl_{i}'])
+        #     plt.figure(f'point_targets_lvl_{i}')
+        #     plt.imshow(inputs[f'point_targets_lvl_{i}'].mean(-1))
+        # plt.show()
+        # NOTE 输入数据可视化后，未发现明显错误
 
-        print([v.shape for v in list(inputs.values())])
+        # print([v.shape for v in list(inputs.values())])
         inputs = [tf.Variable(v,dtype=tf.float32) for v in list(inputs.values())]
 
         # image = np.random.rand(640,640,3)*255
         # image = tf.Variable(inputs,dtype=tf.float32)
-        box_outs = model.build_graph(*inputs)
+        total_loss = model.build_graph(*inputs)
+        
+        # trainable_variables=tf.get_default_graph().get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        # G=tf.get_default_graph()
+        # trainable_variables=G._collections['model_variables']
+        # grads = tape.gradient(total_loss, trainable_variables)
+        # optimizer.apply_gradients(zip(grads, trainable_variables))
     # print(box_outs)
     # init = tf.initialize_all_variables()
     # # print(box_outs)

@@ -15,12 +15,13 @@ from tensorpack.tfutils import SmartInit, get_tf_version_tuple
 from tensorpack.tfutils.export import ModelExporter
 from tensorpack.utils import fs, logger
 
-from dataset import DatasetRegistry, register_coco, register_balloon
+from dataset import DatasetRegistry, register_coco, register_balloon,register_text
 from config import config as cfg
 from config import finalize_configs
 from data import get_eval_dataflow, get_train_dataflow
 from eval import DetectionResult, multithread_predict_dataflow, predict_image
 from modeling.generalized_rcnn import ResNetC4Model, ResNetFPNModel
+from modeling.reppoint_detector import RepPointsFPNDet
 from viz import (
     draw_annotation, draw_final_outputs, draw_predictions,
     draw_proposal_recall, draw_final_outputs_blackwhite)
@@ -125,8 +126,9 @@ if __name__ == '__main__':
         cfg.update_args(args.config)
     register_coco(cfg.DATA.BASEDIR)  # add COCO datasets to the registry
     register_balloon(cfg.DATA.BASEDIR)
+    register_text(cfg.DATA.BASEDIR)
 
-    MODEL = ResNetFPNModel() if cfg.MODE_FPN else ResNetC4Model()
+    MODEL = RepPointsFPNDet() if cfg.MODE_FPN else ResNetC4Model()
 
     if not tf.test.is_gpu_available():
         from tensorflow.python.framework import test_util
