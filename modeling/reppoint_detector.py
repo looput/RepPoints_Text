@@ -265,7 +265,9 @@ def reppoints_head(feature_map,stride,num_points=9):
         dcn_offset = pts_out_init_detach - dcn_base_offset
         cls_feat_dcn = DefConvModule(cls_feat,dcn_offset,128,with_norm=False,act='relu',name='cls_refine_dcn')
         cls_out = ConvModule(cls_feat_dcn,cfg.DATA.NUM_CATEGORY,(1,1),with_norm=False,name='cls_out')
-
+        
+        # print_op = tf.print("feat:", cls_feat,{1:cls_feat_dcn,2:cls_out}, output_stream=sys.stdout)
+        # with tf.control_dependencies([print_op]):
         pts_feat_dcn = DefConvModule(pts_feat,dcn_offset,128,with_norm=False,act='relu',name='pts_refine_dcn')
         pts_out_refine = ConvModule(pts_feat_dcn,2*num_points,(1,1),with_norm=False,name='pts_refine')
 
@@ -327,7 +329,7 @@ def multiclass_nms(pts, scores):
         nms_boxes,
         filtered_scores,
         cfg.TEST.RESULTS_PER_IM,
-        cfg.TEST.FRCNN_NMS_THRESH)
+        cfg.TEST.NMS_THRESH)
 
     final_scores = tf.gather(filtered_scores, selection, name='scores')
     final_labels = tf.gather(labels, selection, name='labes')
@@ -414,25 +416,29 @@ class RepPointsFPNDet(SigleStageDet):
         pts_coord_refine = self.offset_to_pts(center_list,box_outs['pts_refine_outs'])
 
         pts_init_loss = []
+        num_total_init_sample =1e-6
         for idx,st in enumerate(cfg.FPN.STRIDES):
             pts_target_lvl = tf.reshape(targets[f'point_targets_lvl_{idx}'],(1,-1,18)) # (n,h,w,18)
             pts_label_lvl = tf.reshape(targets[f'point_labels_lvl_{idx}'],(1,-1,1)) # (n,h,w,1)
 
             weights = tf.cast(tf.greater(pts_label_lvl,0),tf.float32)
+            num_total_init_sample+=tf.reduce_sum(weights)
             # pos_idx = tf.where(tf.greater(pts_label_lvl,0))
 
             # pos_pts_preds_init = tf.gather(pts_coord_init[idx],pos_idx)
             # pos_pts_targets = tf.gather(pts_target_lvl,pos_idx)
 
             pts_coord_init_lvl = tf.reshape(pts_coord_init[idx],(1,-1,18))
-            pts_init_lvl_loss = smooth_l1loss(pts_target_lvl/float(st),pts_coord_init_lvl/float(st),delta=0.11,weights=weights)
-            pts_init_ls= tf.reduce_sum(pts_init_lvl_loss) / (tf.reduce_sum(weights)+1e-6)
+            normalize_term = 4 * float(st)
+            pts_init_lvl_loss = smooth_l1loss(pts_target_lvl/normalize_term,pts_coord_init_lvl/normalize_term,delta=0.11,weights=weights)
+            pts_init_ls= tf.reduce_sum(pts_init_lvl_loss)
             pts_init_loss.append(pts_init_ls)
-        pts_init_loss=tf.add_n(pts_init_loss,name='loss/pts_init_loss')
+        pts_init_loss=tf.divide(tf.add_n(pts_init_loss),num_total_init_sample,name='loss/pts_init_loss')
         
         # 第二阶段loss涉及到匹配
         cls_loss = []
         pts_refine_loss = []
+        num_total_sample =1e-6
         # NOTE TODO 再不处理batch > 1的情况，后续支持
         cls_out_list = box_outs['cls_outs']
         for idx,st in enumerate(cfg.FPN.STRIDES):
@@ -452,34 +458,40 @@ class RepPointsFPNDet(SigleStageDet):
             gt_polygons = targets['gt_polygons']
             assigin_result = match_to_target(boxes_init,gt_boxes,gt_labels)
 
-            pts_xoord_init_lvl_i = tf.reshape(pts_coord_init_lvl_i,(-1,18))
+            pts_coord_init_lvl_i = tf.reshape(pts_coord_init_lvl_i,(-1,18))
             poly_targets = self.poly_to_target(gt_polygons)
-            target_labels,target_polygons = assign_to_target(pts_xoord_init_lvl_i,assigin_result,gt_labels,poly_targets)
+            target_labels,target_polygons = assign_to_target(pts_coord_init_lvl_i,assigin_result,gt_labels,poly_targets)
 
             # 后续支持batch, 所以保留batch 维度, 对在batch维度进行concat
             target_labels = tf.reshape(target_labels,(1,-1,1))
             target_polygons = tf.reshape(target_polygons,(1,-1,18))
             # loss 计算
             # 分类采用sigmod focus loss, 回归采用smooth l1 loss
+            weights = tf.cast(tf.greater(target_labels,0),tf.float32)
+            num_total_sample +=tf.reduce_sum(weights)
+
+            cls_mask = tf.cast(tf.greater_equal(target_labels,0),tf.float32)
             cls_out_lvl = cls_out_list[idx]
             cls_out_lvl = tf.reshape(cls_out_lvl,(1,-1,1))
-            cls_loss_lvl = sigmoid_focalloss(cls_out_lvl,target_labels,gamma=2.0, alpha=0.25)
-            cls_loss_lvl = tf.reduce_sum(cls_out_lvl)
-            cls_loss.append(cls_loss_lvl) 
+            cls_loss_lvl = sigmoid_focalloss(cls_out_lvl,target_labels,cls_mask,gamma=2.0, alpha=0.25)
+            # TODO torch 中为sum, 但不收敛，原因待查
+            cls_loss_lvl = tf.reduce_mean(cls_loss_lvl)
+            cls_loss.append(cls_loss_lvl)
 
-            weights = tf.cast(tf.greater(target_labels,0),tf.float32)
+            # weights = tf.cast(tf.greater(target_labels,0),tf.float32)
             pts_coord_refine_lvl = tf.reshape(pts_coord_refine[idx],(1,-1,18))
-            pts_refine_ls = smooth_l1loss(target_polygons/float(st),pts_coord_refine_lvl/float(st),delta=0.11,weights=weights)
-            pts_refine_ls= tf.reduce_sum(pts_refine_ls) / (tf.reduce_sum(weights)+1e-6)
+            normalize_term = 4 * float(st)
+            pts_refine_ls = smooth_l1loss(target_polygons/normalize_term,pts_coord_refine_lvl/normalize_term,delta=0.11,weights=weights)
+            pts_refine_ls= tf.reduce_sum(pts_refine_ls)
             pts_refine_loss.append(pts_refine_ls)
         
-        cls_loss =tf.add_n(cls_loss,name='loss/cls_loss')
-        pts_refine_loss=tf.add_n(pts_refine_loss,name='loss/pts_refine_loss')
+        cls_loss = tf.divide(tf.add_n(cls_loss),1.,name='loss/cls_loss')
+        pts_refine_loss=tf.divide(tf.add_n(pts_refine_loss),num_total_sample,name='loss/pts_refine_loss')
         
         # print(pts_init_loss,cls_loss,pts_refine_loss)
         # TODO 将各部分loss 添加至summary
-        add_moving_summary(pts_init_loss,cls_loss,pts_refine_loss)
-        return [pts_init_loss*0.25,cls_loss,pts_refine_loss*0.5]
+        add_moving_summary(pts_init_loss,cls_loss,pts_refine_loss,num_total_init_sample,num_total_sample)
+        return [pts_init_loss*0.5,cls_loss,pts_refine_loss*1]
 
     def poly_to_target(self,polygons):
         upper=polygons[:,0:4,:]
@@ -587,7 +599,8 @@ class RepPointsFPNDet(SigleStageDet):
                 mlvl_scores.append(scores)
             mlvl_scores = tf.concat(mlvl_scores,axis=0)
             mlvl_pts = tf.concat(mlvl_pts,axis=0)
-
+            # print_op = tf.print("scores:", mlvl_scores, output_stream=sys.stdout)
+            # with tf.control_dependencies([print_op]):
             det_boxs,det_pts,det_labels = multiclass_nms(mlvl_pts,mlvl_scores)
 
             det_boxs = tf.identity(det_boxs, name="output/boxes")
@@ -633,16 +646,6 @@ if __name__ == "__main__":
 
     for i in range(10):
         inputs = preprocess(roidbs[i+10])
-        # import viz
-        # img = viz.draw_annotation(inputs['image'],inputs['gt_boxes'],inputs['gt_labels'],inputs['gt_polygons'].reshape(-1,16))
-        # plt.imshow(img)
-        # for i in range(3):
-        #     plt.figure(f'point_labels_lvl_{i}')
-        #     plt.imshow(inputs[f'point_labels_lvl_{i}'])
-        #     plt.figure(f'point_targets_lvl_{i}')
-        #     plt.imshow(inputs[f'point_targets_lvl_{i}'].mean(-1))
-        # plt.show()
-        # NOTE 输入数据可视化后，未发现明显错误
 
         # print([v.shape for v in list(inputs.values())])
         inputs = [tf.Variable(v,dtype=tf.float32) for v in list(inputs.values())]
