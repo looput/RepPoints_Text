@@ -14,6 +14,7 @@ from tensorpack.models import (Conv2D, Conv2DTranspose, GlobalAvgPooling,
                                l2_regularizer, layer_register, regularize_cost)
 from tensorpack.tfutils import optimizer
 from tensorpack.tfutils.argscope import argscope
+from tensorpack.tfutils.optimizer import AccumGradOptimizer
 from tensorpack.tfutils.summary import add_moving_summary
 
 sys.path.append('/home/lupu/project/RepPoints')
@@ -93,6 +94,17 @@ def DefConvModule(x,offset,
         x = tf.keras.layers.Activation(act)(x)
     return x
 
+class ClipOptimizer(AccumGradOptimizer):
+    def __init__(self,opt,niter):
+        super(ClipOptimizer,self).__init__(opt,niter)
+    
+    # @HIDE_DOC
+    # 通过override对梯度进行截断
+    def compute_gradients(self, *args, **kwargs):
+        gvs = self._opt.compute_gradients(*args, **kwargs)
+        # cliped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs]
+        cliped_gvs = [(None if grad is None else tf.clip_by_norm(grad, 35), var) for grad, var in gvs]
+        return cliped_gvs
 
 class SigleStageDet(ModelDesc):
     def preprocess(self, image):
@@ -107,8 +119,11 @@ class SigleStageDet(ModelDesc):
         # The learning rate in the config is set for 8 GPUs, and we use trainers with average=False.
         lr = lr / 8.
         opt = tf.train.MomentumOptimizer(lr, 0.9)
+        # opt = tf.keras.optimizers.SGD(lr, 0.9,clipnorm=35)
         if cfg.TRAIN.NUM_GPUS < 8:
-            opt = optimizer.AccumGradOptimizer(opt, 8 // cfg.TRAIN.NUM_GPUS)
+            # opt = optimizer.AccumGradOptimizer(opt, 8 // cfg.TRAIN.NUM_GPUS)
+            # TODO 对GPUS为8 进行支持
+            opt = ClipOptimizer(opt, 8 // cfg.TRAIN.NUM_GPUS)
         return opt
 
     def get_inference_tensor_names(self):
