@@ -1,4 +1,5 @@
 import tensorflow as tf
+from tensorflow.python.keras.backend import dtype
 
 from tensorpack.models import Conv2D, FullyConnected, layer_register
 from tensorpack.tfutils.argscope import argscope
@@ -82,7 +83,7 @@ def match_to_target(boxes, gt_boxes, gt_labels):
     
     def sample_fg_bg(iou):
         fg_mask = tf.cond(tf.shape(iou)[1] > 0,
-                          lambda: tf.reduce_max(iou, axis=1) >= cfg.FRCNN.FG_THRESH,
+                          lambda: tf.reduce_max(iou, axis=1) >= 0.5,
                           lambda: tf.zeros([tf.shape(iou)[0]], dtype=tf.bool))
 
         fg_inds = tf.reshape(tf.where(fg_mask), [-1])
@@ -90,17 +91,21 @@ def match_to_target(boxes, gt_boxes, gt_labels):
         #     cfg.FRCNN.BATCH_PER_IM * cfg.FRCNN.FG_RATIO),
         #     tf.size(fg_inds), name='num_fg')
         # fg_inds = tf.random.shuffle(fg_inds)[:num_fg]
-
-        bg_inds = tf.reshape(tf.where(tf.logical_not(fg_mask)), [-1])
+        bg_mask = tf.cond(tf.shape(iou)[1] > 0,
+                          lambda: tf.reduce_max(iou, axis=1) <= 0.4,
+                          lambda: tf.zeros([tf.shape(iou)[0]], dtype=tf.bool))
+        bg_inds = tf.reshape(tf.where(bg_mask), [-1])
         # num_bg = tf.minimum(
         #     cfg.FRCNN.BATCH_PER_IM - num_fg,
         #     tf.size(bg_inds), name='num_bg')
         # bg_inds = tf.random.shuffle(bg_inds)[:num_bg]
 
         # add_moving_summary(num_fg, num_bg)
-        return fg_inds, bg_inds
+        sample_mask = tf.logical_or(fg_mask,bg_mask)
+        ignore_inds = tf.reshape(tf.where(tf.logical_not(sample_mask)), [-1])
+        return fg_inds, bg_inds,ignore_inds
 
-    fg_inds, bg_inds = sample_fg_bg(iou)
+    fg_inds, bg_inds,ignore_inds = sample_fg_bg(iou)
     # fg,bg indices w.r.t proposals
 
     best_iou_ind = tf.cond(tf.shape(iou)[1] > 0,
@@ -108,10 +113,12 @@ def match_to_target(boxes, gt_boxes, gt_labels):
                            lambda: tf.zeros([tf.shape(iou)[0]], dtype=tf.int64))
     fg_inds_wrt_gt = tf.gather(best_iou_ind, fg_inds)   # num_fg
 
+    # TODO 增加对ignore样本的处理
     return AssignResult(
         fg_inds,
         bg_inds,
-        fg_inds_wrt_gt
+        fg_inds_wrt_gt,
+        ignore_inds
     )
 
 def assign_to_target(proposal,assign_result,gt_labels,gt_polygons):
@@ -119,7 +126,10 @@ def assign_to_target(proposal,assign_result,gt_labels,gt_polygons):
     pos_labels = tf.gather(gt_labels,assign_result.fg_gt_inds)
     labels = tf.tensor_scatter_nd_update(labels,tf.expand_dims(assign_result.fg_inds,-1),pos_labels)
 
-    polygons = tf.zeros_like(proposal)
+    ignores = tf.zeros_like(assign_result.ignore_inds,dtype=tf.float32)
+    labels = tf.tensor_scatter_nd_update(labels,tf.expand_dims(assign_result.ignore_inds,-1),ignores)
+
+    polygons = tf.zeros_like(proposal,dtype=tf.float32)
     pos_polygons = tf.gather(gt_polygons,assign_result.fg_gt_inds)
     polygons = tf.tensor_scatter_nd_update(polygons,tf.expand_dims(assign_result.fg_inds,-1),pos_polygons)
 
@@ -130,7 +140,7 @@ def assign_to_target(proposal,assign_result,gt_labels,gt_polygons):
 class AssignResult(object):
     '''用来保存match 的结果，主要为index
     '''
-    def __init__(self,fg_inds,bg_inds,fg_gt_inds):
+    def __init__(self,fg_inds,bg_inds,fg_gt_inds,ignore_inds=None):
         ''' 
         Input:
             fg_inds 是指proposal中正样本的索引
@@ -140,6 +150,7 @@ class AssignResult(object):
         self.fg_inds = fg_inds
         self.bg_inds = bg_inds
         self.fg_gt_inds = fg_gt_inds
+        self.ignore_inds = ignore_inds
 
 
 class BoxProposals(object):
