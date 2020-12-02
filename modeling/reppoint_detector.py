@@ -37,7 +37,7 @@ def ConvModule(x,out_channels,
             kernel = (3,3),
             stride = (1,1),
             with_norm=True,
-            act='relu',
+            act='',
             name='conv'):
     with argscope(Conv2D, data_format='channels_first',
                   kernel_initializer=tf.variance_scaling_initializer(
@@ -235,10 +235,10 @@ def reppoints_head(feature_map,stride,num_points=9):
         pts_feat = feature_map
 
         for i in range(1):
-            cls_feat = ConvModule(cls_feat,256,name=f'cls_conv_{i}')
+            cls_feat = ConvModule(cls_feat,256,act='relu',name=f'cls_conv_{i}')
 
         for i in range(1):
-            pts_feat = ConvModule(pts_feat,256,name=f'pts_conv_{i}')
+            pts_feat = ConvModule(pts_feat,256,act='relu',name=f'pts_conv_{i}')
 
         x = ConvModule(pts_feat,256,with_norm=False,act='relu',name='pts_init_conv')
         pts_out_init = ConvModule(x,2*num_points,with_norm=False,act='',name='pts_init_out')# [b,2n,h,w]
