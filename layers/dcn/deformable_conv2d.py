@@ -76,7 +76,6 @@ def _deformable_conv2d_back_prop(op, grad):
     #data_grad = deformable_conv2d_grad_op(data, filter, offset, mask, grad, strides, num_groups, deformable_groups, im2col_step, no_bias, pads, data_format, dilations)
     return data_grad # List of 4 Tensor, since we have 4 input
 
-Deformable_Conv = deformable_conv2d_module.deformable_conv2d
 
 if __name__ == '__main__':
     height = 100
@@ -87,61 +86,34 @@ if __name__ == '__main__':
     tf.disable_eager_execution()
     # tf.enable_eager_execution()
 
-    filter = tf.Variable(tf.random.uniform(shape=[kernel_h, kernel_w, 1, 1], maxval=10))
+    filter = tf.Variable(tf.ones(shape=[kernel_h, kernel_w, 1, 1]),dtype=tf.float32)
     filter_deform = tf.transpose(filter, [3, 2, 0, 1])
     offset = tf.constant([0. for i in range(kernel_h * kernel_w * 2 * height * width)], shape=[1, kernel_h * kernel_w * 2, height, width])
     mask = tf.constant([1. for i in range(kernel_h * kernel_w * height* width)], shape=[1, kernel_h * kernel_w, height, width])
     import numpy as np
-    image = tf.placeholder(shape=[1,3,None,None],dtype=tf.float32)
+    # image = tf.placeholder(shape=[1,1,None,None],dtype=tf.float32)
+    image = tf.constant([1. for i in range(75)], shape=[1, 1, 100, 100])
     # image = np.random.rand(1,1,100,100)
     # image = tf.Variable(image,dtype=tf.float32)
-    result = deformable_conv2d_module.deformable_conv2d(
-        input=image,
-        filter=filter_deform,
-        offset=offset,
-        mask=mask,
-        strides=[1, 1, 1, 1],
-        num_groups=1,
-        deformable_groups=1,
-        im2col_step=1,
-        no_bias=True,
-        padding=padding,
-        data_format='NCHW',
-        dilations=[1, 1, 1, 1])
-    print(result)
+    with tf.device('/gpu:0'):
 
-    # tf.enable_eager_execution()
-    # height = 100
-    # width = 100
-    # kernel_h = 3
-    # kernel_w = 3
-    # padding = "SAME"
-    # # input = tf.random.uniform(shape=[1, 3, height, width], maxval=10)
-    # with tf.GradientTape(persistent=True) as tape:
-    #     #input = tf.ones(shape=[1, 1, height, width])
-    #     input = tf.random.uniform(shape=[32, 512, height, width], maxval=10)
-    #     tape.watch(input)
-    #     input_b = tf.pad(input, [[0, 0], [0, 0], [1, 1], [1, 1]])
-    #     filter = tf.Variable(tf.random.uniform(shape=[kernel_h, kernel_w, 1, 1], maxval=10))
-    #     filter_deform = tf.transpose(filter, [3, 2, 0, 1])
-    #     offset = tf.constant([0. for i in range(kernel_h * kernel_w * 2 * height * width)], shape=[1, kernel_h * kernel_w * 2, height, width])
-    #     mask = tf.constant([1. for i in range(kernel_h * kernel_w * height* width)], shape=[1, kernel_h * kernel_w, height, width])
-    #     result = deformable_conv2d_module.deformable_conv2d(
-    #         input=input,
-    #         filter=filter_deform,
-    #         offset=offset,
-    #         mask=mask,
-    #         strides=[1, 1, 1, 1],
-    #         num_groups=1,
-    #         deformable_groups=1,
-    #         im2col_step=1,
-    #         no_bias=True,
-    #         padding=padding,
-    #         data_format='NCHW',
-    #         dilations=[1, 1, 1, 1])
-    #     #conv2d = tf.nn.conv2d(input, filter, [1, 1, 1, 1], padding, data_format='NCHW')
-    #     grad1 = tape.gradient(result, input)
-    #     #grad2 = tape.gradient(conv2d, input)
-    #     print(input)
-    #     print(grad1)
-    #     #print(grad2) 
+        result = deformable_conv2d_module.deformable_conv2d(
+            input=image,
+            filter=filter_deform,
+            offset=offset,
+            mask=mask,
+            strides=[1, 1, 1, 1],
+            num_groups=1,
+            deformable_groups=1,
+            im2col_step=1,
+            no_bias=True,
+            padding=padding,
+            data_format='NCHW',
+            dilations=[1, 1, 1, 1])
+        print(result)
+
+        init = tf.global_variables_initializer()
+        with tf.Session() as sess:
+            sess.run(init)
+            res = sess.run(result,feed_dict={image:np.ones((1,1,100,100),dtype=np.float32)})
+            print(res)

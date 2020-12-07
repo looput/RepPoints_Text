@@ -212,8 +212,8 @@ REGISTER_OP("DeformableConv2DBackProp")
 template<typename Device, typename T>
 class DeformableConv2DOp : public OpKernel {
  public:
-  explicit DeformableConv2DOp(OpKernelConstruction *ctx) : OpKernel(ctx) {
-      OP_REQUIRES_OK(ctx, InitDeformableConv2DParameters(ctx, &params_));
+  explicit DeformableConv2DOp(OpKernelConstruction *context) : OpKernel(context) {
+      OP_REQUIRES_OK(context, InitDeformableConv2DParameters(context, &params_));
   }
   void Compute(OpKernelContext *context) override {
       // Input tensor's shape

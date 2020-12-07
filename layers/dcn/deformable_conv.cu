@@ -1,7 +1,3 @@
-//
-// Created by 孙嘉禾 on 2019/12/31.
-//
-
 #ifdef __JETBRAINS_IDE__
 #define __host__
 #define __device__
@@ -25,6 +21,7 @@
 #include "deformable_conv2d.h"
 #include <cstdlib>
 #include "tensorflow/core/util/gpu_kernel_helper.h"
+// #include "tensorflow/core/util/cuda_kernel_helper.h" // For 1.13.0
 
 #ifdef GOOGLE_CUDA
 #include "tensorflow/core/platform/stream_executor.h"

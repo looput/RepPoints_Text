@@ -1,7 +1,3 @@
-//
-// Created by 孙嘉禾 on 2019/12/31.
-//
-
 #ifndef TF_OPS_DEFORMABLE_CONV2D_H
 #define TF_OPS_DEFORMABLE_CONV2D_H
 
