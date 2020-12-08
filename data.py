@@ -2,10 +2,12 @@
 # File: data.py
 
 import copy
+from dataset.text import register_text,register_text_full
 import itertools
 import numpy as np
 import cv2
 from tabulate import tabulate
+from tensorpack.train import config
 from termcolor import colored
 
 from tensorpack.dataflow import (
@@ -29,6 +31,11 @@ from utils.polygons import expand_point
 
 import tensorpack.utils.viz as tpviz
 
+def imread(fname,decode):
+    with open(fname,'rb') as f:
+        img_data = np.asarray(bytearray(f.read()), dtype="uint8")
+        img=cv2.imdecode(img_data,decode)
+    return img
 
 class MalformedData(BaseException):
     pass
@@ -76,14 +83,14 @@ class TrainingDataPreprocessor:
         self.aug = imgaug.AugmentorList([
             # CustomResize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE),
             Random_Resize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE),
-            imgaug.Flip(horiz=True)
+            # imgaug.Flip(horiz=True)
         ])
 
     def __call__(self, roidb):
         fname, boxes, klass, is_crowd = roidb["file_name"], roidb["boxes"], roidb["class"], roidb["is_crowd"]
         assert boxes.ndim == 2 and boxes.shape[1] == 4, boxes.shape
         boxes = np.copy(boxes)
-        im = cv2.imread(fname, cv2.IMREAD_COLOR)
+        im = imread(fname, cv2.IMREAD_COLOR)
         assert im is not None, fname
         im = im.astype("float32")
         height, width = im.shape[:2]
@@ -103,7 +110,7 @@ class TrainingDataPreprocessor:
         if len(boxes):
             assert klass.max() <= self.cfg.DATA.NUM_CATEGORY, \
                 "Invalid category {}!".format(klass.max())
-            assert np.min(np_area(boxes)) > 0, "Some boxes have zero area!"
+            # assert np.min(np_area(boxes)) > 0, "Some boxes have zero area!"
 
         ret = {"image": im}
         ret['gt_boxes'] = boxes
@@ -161,8 +168,8 @@ class TrainingDataPreprocessor:
             # tpviz.interactive_imshow(viz)
         if self.cfg.MODE_POLYGON:
             segmentation = copy.deepcopy(roidb["segmentation"]) # [[[np,2]],[[np,2]]]
-            segmentation = [segmentation[k] for k in range(len(segmentation)) if not is_crowd[k]]
-            assert len(segmentation) == len(boxes)
+            # segmentation = [segmentation[k] for k in range(len(segmentation)) if not is_crowd[k]]
+            # assert len(segmentation) == len(boxes)
 
             polygons = []
             for polys in segmentation:
@@ -400,9 +407,9 @@ class TrainingDataPreprocessor:
         # assign gt box
         gt_bboxes_xy = (gt_bboxes[:, :2] + gt_bboxes[:, 2:]) / 2
         gt_bboxes_wh = (gt_bboxes[:, 2:] - gt_bboxes[:, :2]).clip(1e-6)
-        scale = 4 # TODO 写到cfg里面
-        gt_bboxes_lvl = ((np.log2(gt_bboxes_wh[:, 0] / scale) +
-                          np.log2(gt_bboxes_wh[:, 1] / scale)) / 2).astype(np.int32)
+        base_scale = 4 # TODO 写到cfg里面
+        gt_bboxes_lvl = ((np.log2(gt_bboxes_wh[:, 0] / base_scale) +
+                          np.log2(gt_bboxes_wh[:, 1] / base_scale)) / 2).astype(np.int32)
         gt_bboxes_lvl = np.clip(gt_bboxes_lvl, int(lvl_min), int(lvl_max))
         gt_bboxes_lvl = gt_bboxes_lvl-int(lvl_min)
 
@@ -518,12 +525,40 @@ if __name__ == "__main__":
     import os
     from tensorpack.dataflow import PrintData
     from config import finalize_configs
+    
+    from config import config as cfg
+    cfg.DATA.TRAIN = [f'general_text_{i}' for i in range(10)] 
+    cfg.DATA.NUM_WORKERS=0
 
     # register_coco(os.path.expanduser("~/data/coco"))
-    register_text('/home/lupu/27_screenshot/MLT_2017/')
+    register_text_full('/home/lupu/27_screenshot/')
     finalize_configs(True)
+
+    # import pudb; pudb.set_trace()
     ds = get_train_dataflow()
-    ds = PrintData(ds, 10)
-    TestDataSpeed(ds, 50000).start()
-    for _ in ds:
-        pass
+    # ds = PrintData(ds, 10)
+    # TestDataSpeed(ds, 50000).start()
+    ds.reset_state()
+    cv2.namedWindow('img',1)
+    for ret in ds:
+        import viz
+        import matplotlib.pyplot as plt
+        # img = viz.draw_annotation(ret['image'],ret['gt_boxes'],ret['gt_labels'],ret['gt_polygons'].reshape(-1,16))
+        img_show = ret['image'].astype(np.uint8)
+        for index_gt, box in enumerate(ret['gt_polygons']):
+            box=box.astype(np.int32).reshape(-1,2)
+            color_l=[(255,255,255),(0,0,255),(255,255,0),(255,0,0)]
+            for index,point in enumerate(box):
+                cv2.circle(img_show,(point[0],point[1]),1,color_l[1],1)
+                cv2.putText(img_show,'%d'%index,(point[0],point[1]),cv2.FONT_HERSHEY_SIMPLEX,0.4,color_l[1],1)
+        # plt.imshow(img_show)
+        cv2.imshow('img',img_show)
+        cv2.waitKey()
+
+        # for i in range(3):
+        #     plt.figure(f'point_labels_lvl_{i}')
+        #     plt.imshow(ret[f'point_labels_lvl_{i}'])
+        #     plt.figure(f'point_targets_lvl_{i}')
+        #     plt.imshow(ret[f'point_targets_lvl_{i}'].mean(-1))
+        # plt.show()
+        # NOTE 输入数据可视化后，未发现明显错误
