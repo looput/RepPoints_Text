@@ -22,6 +22,10 @@ try:
 except ImportError:
     pass
 
+import os
+if 'S3_ENDPOINT' in os.environ.keys():
+    import moxing as mox
+    mox.file.shift('os', 'mox')
 
 if __name__ == '__main__':
     # "spawn/forkserver" is safer than the default "fork" method and
@@ -47,7 +51,7 @@ if __name__ == '__main__':
     if is_horovod:
         hvd.init()
     if not is_horovod or hvd.rank() == 0:
-        logger.set_logger_dir(args.logdir, 'd')
+        logger.set_logger_dir(args.logdir, 'k')
     logger.info("Environment Information:\n" + collect_env_info())
 
     finalize_configs(is_training=True)
@@ -79,7 +83,7 @@ if __name__ == '__main__':
     # Create callbacks ...
     callbacks = [
         PeriodicCallback(
-            ModelSaver(max_to_keep=10, keep_checkpoint_every_n_hours=1),
+            ModelSaver(max_to_keep=10, keep_checkpoint_every_n_hours=1,checkpoint_dir=args.logdir),
             every_k_steps=cfg.TRAIN.CHECKPOINT_PERIOD),
             # every_k_epochs=cfg.TRAIN.CHECKPOINT_PERIOD),
         # linear warmup
@@ -98,6 +102,13 @@ if __name__ == '__main__':
             EvalCallback(dataset, *MODEL.get_inference_tensor_names(), args.logdir)
             for dataset in cfg.DATA.VAL
         ])
+    
+    if 'S3_ENDPOINT' in os.environ.keys():
+        from utils.obs_sync import Sync
+        callbacks.append(PeriodicCallback(
+            Sync(args.logdir,'s3://bucket-63-ocr/lupu/log/'+args.logdir.split('/')[-1]),
+            every_k_steps=cfg.TRAIN.CHECKPOINT_PERIOD)
+        )
 
     if is_horovod and hvd.rank() > 0:
         session_init = None
