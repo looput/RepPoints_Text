@@ -2,3 +2,4 @@ tensorpack==0.10.1
 tensorflow-gpu==1.14.0
 pycocotools
 gast==0.2.2
+Polygon3
