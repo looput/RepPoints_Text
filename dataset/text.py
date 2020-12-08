@@ -74,13 +74,34 @@ class TextDection(DatasetSplit):
         return self.load('test',with_gt=True)
     
     def eval_inference_results(self, results, output=None):
-        for res in results:
+        # import pudb; pudb.set_trace()
+        if not os.path.isdir(output):
+            # os.removedirs(output)
+            os.makedirs(output)
+        for idx,res_per_img in enumerate(results):
+            lines = []
+            for b_idx, instance in enumerate(res_per_img):
+                poly= instance['polygons'].reshape(-1).tolist()
+                values = [int(v) for v in poly]
+                # values.append(angle[b_idx])
+                # line = os.path.basename(instance['image_id'])+';'+"%d"%values[0]
+                line = "%d"%values[0]
+                for v_id in range(1, len(values)):
+                    line += "; %d"%values[v_id]
+                line +='; 0'
+                line += '\n'
+                lines.append(line)
 
-            # COCO expects results in xywh format
-            box = res['bbox']
-            box[2] -= box[0]
-            box[3] -= box[1]
-            res['bbox'] = [round(float(x), 3) for x in box]
+            if len(res_per_img)>0:
+                image_name=os.path.basename(res_per_img[0]['image_id'])
+                filename=os.path.join(output,image_name.split('.')[0]+'.txt')
+
+                with open(filename,'w') as f:
+                    for line in lines:
+                        f.write(line)
+
+        # import pudb; pudb.set_trace()
+        res = eval_result(output,self.base_dir)
 
         if output is not None:
             with open(output, 'w') as f:

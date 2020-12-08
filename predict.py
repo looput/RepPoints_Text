@@ -8,6 +8,7 @@ import shutil
 import tensorflow as tf
 import cv2
 import tqdm
+import glob
 
 import tensorpack.utils.viz as tpviz
 from tensorpack.predict import MultiTowerOfflinePredictor, OfflinePredictor, PredictConfig
@@ -101,7 +102,8 @@ def do_predict(pred_func, input_file):
         final = draw_final_outputs_blackwhite(img, results)
     else:
         final = draw_final_outputs(img, results)
-    viz = np.concatenate((img, final), axis=1)
+    viz =final
+    # viz = np.concatenate((img, final), axis=1)
     cv2.imwrite("output.png", viz)
     logger.info("Inference output for {} written to output.png".format(input_file))
     tpviz.interactive_imshow(viz)
@@ -157,9 +159,11 @@ if __name__ == '__main__':
         if args.predict:
             predictor = OfflinePredictor(predcfg)
             for image_file in args.predict:
-                do_predict(predictor, image_file)
+                file_lst = glob.glob(image_file)
+                for img_pth in file_lst:
+                    do_predict(predictor, img_pth)
         elif args.evaluate:
-            assert args.evaluate.endswith('.json'), args.evaluate
+            # assert args.evaluate.endswith('.json'), args.evaluate
             do_evaluate(predcfg, args.evaluate)
         elif args.benchmark:
             df = get_eval_dataflow(cfg.DATA.VAL[0])

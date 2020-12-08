@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 # File: eval.py
 
+import time as tim
+from datetime import time
 import itertools
 import json
+from matplotlib.pyplot import axis
 import numpy as np
 import os
 import sys
@@ -19,10 +22,11 @@ from tensorpack.callbacks import Callback
 from tensorpack.tfutils.common import get_tf_version_tuple
 from tensorpack.utils import logger, get_tqdm
 
-from common import CustomResize, clip_boxes
+from common import CustomResize, clip_boxes,Random_Resize,Resize
 from config import config as cfg
 from data import get_eval_dataflow
 from dataset import DatasetRegistry
+from common import polygons_to_mask
 
 try:
     import horovod.tensorflow as hvd
@@ -32,12 +36,13 @@ except ImportError:
 
 DetectionResult = namedtuple(
     'DetectionResult',
-    ['box', 'score', 'class_id', 'mask'])
+    ['box', 'score', 'class_id', 'mask','polygons'])
 """
 box: 4 float
 score: float
 class_id: int, 1~NUM_CLASS
 mask: None, or a binary image of the original image shape
+polygons: 8x2 float
 """
 
 
@@ -120,24 +125,41 @@ def predict_image(img, model_func):
         [DetectionResult]
     """
     orig_shape = img.shape[:2]
-    resizer = CustomResize(cfg.PREPROC.TEST_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE)
+    resizer = Resize(cfg.PREPROC.TEST_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE,True)
     resized_img = resizer.augment(img)
-    scale = np.sqrt(resized_img.shape[0] * 1.0 / img.shape[0] * resized_img.shape[1] / img.shape[1])
-    boxes, probs, labels, *masks = model_func(resized_img)
+    scale_h,scale_w = (resized_img.shape[0] * 1.0 / img.shape[0], resized_img.shape[1] / img.shape[1])
+    # boxes, probs, labels, *masks = model_func(resized_img)
+    t0 = tim.time()
+    boxes, labels, *polygons = model_func(resized_img)
+    # print('Time:',tim.time()-t0)
+    probs = boxes[:,4]
+    boxes = boxes[:,:4]
 
+    # orig_shape = resized_img.shape[:2]
     # Some slow numpy postprocessing:
-    boxes = boxes / scale
+    # 
+    boxes = boxes / np.array([scale_w,scale_h,scale_w,scale_h])
     # boxes are already clipped inside the graph, but after the floating point scaling, this may not be true any more.
     boxes = clip_boxes(boxes, orig_shape)
-    if masks:
-        full_masks = [_paste_mask(box, mask, orig_shape)
-                      for box, mask in zip(boxes, masks[0])]
-        masks = full_masks
-    else:
-        # fill with none
-        masks = [None] * len(boxes)
+    
+    # From poly to mask
+    masks = []
+    re_polygons = []
+    for p in polygons[0]:
+        p = p/np.array([scale_w,scale_h])
+        p = np.concatenate((p[:4,:],np.flip(p[5:,:],axis=0)),axis=0)
+        masks.append(polygons_to_mask([p], orig_shape[0], orig_shape[1]))
+        re_polygons.append(p)
 
-    results = [DetectionResult(*args) for args in zip(boxes, probs, labels.tolist(), masks)]
+    # if masks:
+    #     full_masks = [_paste_mask(box, mask, orig_shape)
+    #                   for box, mask in zip(boxes, masks[0])]
+    #     masks = full_masks
+    # else:
+    #     # fill with none
+    # masks = [None] * len(boxes)
+
+    results = [DetectionResult(*args) for args in zip(boxes, probs, labels.tolist(), masks,re_polygons)]
     return results
 
 
@@ -162,6 +184,7 @@ def predict_dataflow(df, model_func, tqdm_bar=None):
             tqdm_bar = stack.enter_context(get_tqdm(total=df.size()))
         for img, img_id in df:
             results = predict_image(img, model_func)
+            res_per_img = []
             for r in results:
                 # int()/float() to make it json-serializable
                 res = {
@@ -170,14 +193,16 @@ def predict_dataflow(df, model_func, tqdm_bar=None):
                     'bbox': [round(float(x), 4) for x in r.box],
                     'score': round(float(r.score), 4),
                 }
-
+                if r.polygons is not None:
+                    res['polygons'] = r.polygons
                 # also append segmentation to results
-                if r.mask is not None:
+                elif r.mask is not None:
                     rle = cocomask.encode(
                         np.array(r.mask[:, :, None], order='F'))[0]
                     rle['counts'] = rle['counts'].decode('ascii')
                     res['segmentation'] = rle
-                all_results.append(res)
+                res_per_img.append(res)
+            all_results.append(res_per_img)
             tqdm_bar.update(1)
     return all_results
 

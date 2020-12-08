@@ -502,7 +502,7 @@ def get_eval_dataflow(name, shard=0, num_shards=1):
     img_range = (shard * img_per_shard, (shard + 1) * img_per_shard if shard + 1 < num_shards else num_imgs)
 
     # no filter for training
-    ds = DataFromListOfDict(roidbs[img_range[0]: img_range[1]], ["file_name", "image_id"])
+    ds = DataFromListOfDict(roidbs[img_range[0]: img_range[1]], ["file_name", "file_name"])
 
     def f(fname):
         im = cv2.imread(fname, cv2.IMREAD_COLOR)

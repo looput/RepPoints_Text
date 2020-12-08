@@ -97,6 +97,41 @@ class Random_Resize(ImageAugmentor):
         newh = ((newh+self.divs-1)//self.divs)*self.divs
         return ResizeTransform(h, w, newh, neww, self.interp)
 
+class Resize(ImageAugmentor):
+    ''' 图片的尺寸应能整除一些数字
+    '''
+    def __init__(self, min_length, max_length,keep_ratio=False,divs=32, interp=cv2.INTER_LINEAR):
+        """
+        Args:
+            short_edge_length ([int, int]): a [min, max] interval from which to sample the
+                shortest edge length.
+            max_size (int): maximum allowed longest edge length.
+        """
+        super(Resize, self).__init__()
+        self.divs = divs
+        self.min_length = min_length
+        self.max_length = max_length
+        self.keep_ratio = keep_ratio
+        self._init(locals())
+
+    def get_transform(self, img):
+        h, w = img.shape[:2]
+        if not self.keep_ratio:
+            if h < w:
+                newh, neww = self.min_length, self.max_length
+            else:
+                newh, neww = self.max_length, self.min_length
+        else:
+            # sacle = self.max_length/max(h,w)
+            sacle = self.min_length/min(h,w)
+            newh,neww = h*sacle,w*sacle
+        neww = int(neww + 0.5)
+        newh = int(newh + 0.5)
+        
+        neww = ((neww+self.divs-1)//self.divs)*self.divs
+        newh = ((newh+self.divs-1)//self.divs)*self.divs
+        return ResizeTransform(h, w, newh, neww, self.interp)
+
 def box_to_point4(boxes):
     """
     Convert boxes to its corner points.
