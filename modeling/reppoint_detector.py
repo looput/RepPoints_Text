@@ -249,10 +249,10 @@ def reppoints_head(feature_map,stride,num_points=9):
         cls_feat = feature_map
         pts_feat = feature_map
 
-        for i in range(1):
+        for i in range(2):
             cls_feat = ConvModule(cls_feat,256,act='relu',name=f'cls_conv_{i}')
 
-        for i in range(1):
+        for i in range(2):
             pts_feat = ConvModule(pts_feat,256,act='relu',name=f'pts_conv_{i}')
 
         x = ConvModule(pts_feat,256,with_norm=False,act='relu',name='pts_init_conv')
