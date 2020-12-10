@@ -4,8 +4,6 @@
 2. 数据加载和处理代码 `dataset\text.py`, `data.py`
 3. 训练框架TF,tensorpack
 
-## Issue
-? 关于layer的命名，不同layer重命名是否能导致变量复用
 
 ## TODO
 - [x] DCN算子
@@ -14,11 +12,20 @@
 - [ ] pytorch版本训练的参数迁移，验证推理网络的正确性
 - [x] 训练代码(两个阶段，初始预测阶段和回归阶段)
 - [x] 训练模型，验证正确性
+- [x] 效果评估及可视化
+- [ ] 数据扩增优化
 - [ ] 配置文件优化
 - [ ] batch支持（数据加载、部分后处理）
-- [ ] Mask RCNN 和 RepPoints模型的融合，通过配置文件的更改直接训练
+- [ ] Mask RCNN 和 RepPoints代码的融合，通过配置文件的更改直接训练
+
 
 ## 优化
 1. IOU计算优化，使用Rotated Box
 2. DCN offset的监督调整，对于Rotated box 可以添加约束
 3. FPN融合方式更改
+
+
+## Other
+
+一个优化的版本 https://github.com/aws-samples/mask-rcnn-tensorflow 
+issue: https://github.com/tensorflow/tensorflow/issues/32383
