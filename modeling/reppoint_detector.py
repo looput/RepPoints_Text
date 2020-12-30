@@ -5,6 +5,8 @@
 import enum
 from functools import total_ordering
 import sys
+from matplotlib.pyplot import axis
+import math
 
 # from tensorpack import tfv1 as tf
 import numpy as np
@@ -27,6 +29,7 @@ from utils.box_ops import area as tf_area
 from modeling.backbone import (GroupNorm, image_preprocess, resnet_c4_backbone,
                                resnet_conv5, resnet_fpn_backbone)
 from modeling.model_fpn import fpn_model
+from modeling.resnet import Resnet_Model
 from utils.point_generator import PointGenerator
 from layers.loss import smooth_l1loss,sigmoid_focalloss
 from modeling.target_match import match_to_target, assign_to_target
@@ -144,7 +147,7 @@ class SigleStageDet(ModelDesc):
         return ['image'], out
 
     # def training():
-    #     return True
+    #     return False
         
     def build_graph(self, *inputs):
         inputs = dict(zip(self.input_names, inputs))
@@ -154,11 +157,11 @@ class SigleStageDet(ModelDesc):
 
         image = self.preprocess(inputs['image'])     # 1CHW
 
-        features = self.backbone(image)[1:4]
+        features = self.backbone(image)
         box_outs = self.box_head(features)
 
         if self.training:
-        # if True:
+        # if False:
             targets_name = [na for na in self.input_names if na!='image']
             targets = dict(zip(targets_name,[inputs[na] for na in targets_name]))
             head_losses = self.head_losses(box_outs,targets)
@@ -171,7 +174,7 @@ class SigleStageDet(ModelDesc):
             return total_cost
         else:
             result = self.postprocess(box_outs)
-            # return result
+            return result
 
             # Check that the model defines the tensors it declares for inference
             # For existing models, they are defined in "fastrcnn_predictions(name_scope='output')"
@@ -250,14 +253,14 @@ def reppoints_head(feature_map,stride,num_points=9):
         pts_feat = feature_map
 
         for i in range(2):
-            cls_feat = ConvModule(cls_feat,256,act='relu',name=f'cls_conv_{i}')
+            cls_feat = ConvModule(cls_feat,cfg.REPPOINTS.FEAT_DIMS,act='relu',name=f'cls_conv_{i}')
 
         for i in range(2):
-            pts_feat = ConvModule(pts_feat,256,act='relu',name=f'pts_conv_{i}')
+            pts_feat = ConvModule(pts_feat,cfg.REPPOINTS.FEAT_DIMS,act='relu',name=f'pts_conv_{i}')
 
-        x = ConvModule(pts_feat,256,with_norm=False,act='relu',name='pts_init_conv')
-        pts_out_init = ConvModule(x,2*num_points,with_norm=False,act='',name='pts_init_out')# [b,2n,h,w]
-
+        x = ConvModule(pts_feat,cfg.REPPOINTS.FEAT_DIMS,with_norm=False,act='relu',name='pts_init_conv')
+        pts_out_init = ConvModule(x,2*num_points,(3,3),with_norm=False,act='',name='pts_init_out')# [b,2n,h,w]
+        
         gradient_mul = 0.1
         pts_out_init_detach = tf.stop_gradient(pts_out_init)*(1-gradient_mul)+pts_out_init*gradient_mul
         # classify
@@ -273,7 +276,12 @@ def reppoints_head(feature_map,stride,num_points=9):
 
         pts_out_refine = tf.math.add(tf.stop_gradient(pts_out_init),pts_out_refine,name='pts_refine_out')
 
-        return cls_out,pts_out_init,pts_out_refine  
+        # dcn_offset = pts_out_refine - dcn_base_offset
+        # pts_feat_dcn = DefConvModule(pts_feat,dcn_offset,128,with_norm=False,act='relu',name='pts_refine_dcn')
+        # offset = ConvModule(pts_feat_dcn,2*num_points,(1,1),with_norm=False,name='pts_refine')
+        # pts_out_refine = tf.math.add(tf.stop_gradient(pts_out_refine),offset,name='pts_refine_out')
+
+        return cls_out,pts_out_init,pts_out_refine
 
     # Dense RepPoint 
     # # point refine
@@ -367,9 +375,15 @@ class RepPointsFPNDet(SigleStageDet):
         return ret
 
     def backbone(self, image):
-        c2345 = resnet_fpn_backbone(image, cfg.BACKBONE.RESNET_NUM_BLOCKS)
+        if cfg.BACKBONE.CUS==-1:
+            c2345 = resnet_fpn_backbone(image, cfg.BACKBONE.RESNET_NUM_BLOCKS)
+        else:
+            model = Resnet_Model(cfg.BACKBONE.CUS,'channels_first')
+            c2345 = model.output(image)
         p23456 = fpn_model('fpn', c2345)
-        return p23456
+        min_lvl = int(math.log(cfg.FPN.STRIDES[0],2)-2)
+        max_lvl = int(math.log(cfg.FPN.STRIDES[-1],2)-2)
+        return p23456[min_lvl:max_lvl+1]
 
     def box_head(self, features):
         # Multi-Level RPN Proposals]
@@ -450,7 +464,7 @@ class RepPointsFPNDet(SigleStageDet):
             max_x = tf.reduce_max(pts_x,axis=-1,keepdims=True)
             min_y = tf.reduce_min(pts_y,axis=-1,keepdims=True)
             max_y = tf.reduce_max(pts_y,axis=-1,keepdims=True)
-            boxes_init = tf.concat([min_x,min_y,max_x,max_y],axis=-1)            
+            boxes_init = tf.concat([min_x,min_y,max_x,max_y],axis=-1)
             # boxes_init = self.points_formate(pts_coord_init_lvl,target='box',y_first=False)
 
             gt_boxes = targets['gt_boxes']
@@ -474,6 +488,19 @@ class RepPointsFPNDet(SigleStageDet):
             cls_out_lvl = cls_out_list[idx]
             cls_out_lvl = tf.reshape(cls_out_lvl,(1,-1,1))
             cls_loss_lvl = sigmoid_focalloss(cls_out_lvl,target_labels,cls_mask,gamma=2.0, alpha=0.25)
+            # TODO 这个有效性还待验证
+            # 对小目标的loss进行加强
+            if False:
+                tg = tf.reshape(target_polygons,(1,-1,9,2))
+                dis = tf.reduce_max(tf.abs(tg - tg[:,:,4:5,:])+2.,axis=(2,3))
+                scale =  tf.math.log(dis)/tf.math.log(2.)
+                scale = tf.expand_dims(8./scale,-1)
+                pos_mask=tf.cast(tf.greater(target_labels,0),tf.float32)
+                neg_mask=1.-pos_mask
+                # print_op = tf.print("scale:", tf.reduce_max(pos_mask*scale),tf.reduce_sum(pos_mask*scale)/tf.reduce_sum(pos_mask), output_stream=sys.stdout)
+                # with tf.control_dependencies([print_op]):
+                cls_loss_lvl = pos_mask*scale*cls_loss_lvl+neg_mask*cls_loss_lvl
+
             # TODO torch 中为sum, 但不收敛，原因待查
             cls_loss_lvl = tf.reduce_mean(cls_loss_lvl)
             cls_loss.append(cls_loss_lvl)
@@ -619,12 +646,13 @@ if __name__ == "__main__":
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
-    tf.enable_eager_execution(config=config)
+    # tf.enable_eager_execution(config=config)
     # tf.disable_eager_execution()
     # import crash_on_ipy
     # with tf.device('/gpu:0'):
     from config import finalize_configs
     from dataset import register_text
+    from dataset.text import register_text_train
     
     # import config as cfg
     from data import TrainingDataPreprocessor
@@ -634,7 +662,7 @@ if __name__ == "__main__":
     # from keras import backend as K
     # K.set_session(sess)
 
-    register_text('/home/lupu/27_screenshot/MLT_2017/')
+    register_text_train('/home/lupu/27_screenshot/MLT_2017/')
     finalize_configs(True)
     
     model = RepPointsFPNDet()
@@ -642,34 +670,36 @@ if __name__ == "__main__":
 
     preprocess = TrainingDataPreprocessor(cfg)
     
-    roidbs = DatasetRegistry.get('text_train').training_roidbs()
+    # roidbs = DatasetRegistry.get('text_train').training_roidbs()
 
-    for i in range(10):
-        inputs = preprocess(roidbs[i+10])
+    # for i in range(10):
+    #     inputs = preprocess(roidbs[i+10])
 
-        # print([v.shape for v in list(inputs.values())])
-        inputs = [tf.Variable(v,dtype=tf.float32) for v in list(inputs.values())]
+    #     # print([v.shape for v in list(inputs.values())])
+    #     inputs = [tf.Variable(v,dtype=tf.float32) for v in list(inputs.values())]
 
-        # image = np.random.rand(640,640,3)*255
-        # image = tf.Variable(inputs,dtype=tf.float32)
-        total_loss = model.build_graph(*inputs)
+    #     # image = np.random.rand(640,640,3)*255
+    #     # image = tf.Variable(inputs,dtype=tf.float32)
+    #     total_loss = model.build_graph(*inputs)
         
         # trainable_variables=tf.get_default_graph().get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         # G=tf.get_default_graph()
         # trainable_variables=G._collections['model_variables']
         # grads = tape.gradient(total_loss, trainable_variables)
         # optimizer.apply_gradients(zip(grads, trainable_variables))
+    image = tf.placeholder(shape=[None,None,3],dtype=tf.float32)
+    box_outs = model.build_graph(*[image])
+    print(box_outs)
+    init = tf.initialize_all_variables()
     # print(box_outs)
-    # init = tf.initialize_all_variables()
-    # # print(box_outs)
-    # sess = tf.Session()
-    # with tf.Session() as sess:
-    #     sess.run(init)
-    #     sess.run(box_outs, feed_dict={image: np.ones((700,700,3),dtype=np.int32)})  
-    #     import time
-    #     t0=time.time()
-    #     for i in range(10):
-    #         ss = (600+i*10,600+i*10,3)
-    #         # ss = (700,700,3)
-    #         result = sess.run(box_outs, feed_dict={image: np.random.randint(255,size=ss)})
-    #     print((time.time()-t0)/10)
+    sess = tf.Session()
+    with tf.Session() as sess:
+        sess.run(init)
+        sess.run(box_outs, feed_dict={image: np.rand((1024,1024,3),dtype=np.int32)})  
+        import time
+        t0=time.time()
+        for i in range(5):
+            ss = (1024,1024,3)
+            # ss = (700,700,3)
+            result = sess.run(box_outs, feed_dict={image: np.random.randint(255,size=ss)})
+        print((time.time()-t0)/10)
