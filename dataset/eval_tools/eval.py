@@ -169,4 +169,4 @@ def eval_result(pred_root,gt_root):
     print('P, R, F, %.4f %.4f %.4f'%(precision, recall, hmean))
     # print('p: %.4f, r: %.4f, f: %.4f, p: %.4f, r: %.4f, f_angle: %.4f'%(precision, recall, hmean,precision_rec,recall_rec,hmean_rec))
     
-    return {'precision':precision,'recall':recall,'hmean':hmean}
+    return {'tp':tp, 'fp':fp, 'npos':npos,'precision':precision,'recall':recall,'hmean':hmean}
