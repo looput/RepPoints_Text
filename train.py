@@ -2,6 +2,7 @@
 # File: train.py
 
 import argparse
+from dataset.text import register_test,register_text_train
 
 from tensorpack import *
 from tensorpack.tfutils import collect_env_info
@@ -45,6 +46,7 @@ if __name__ == '__main__':
     register_coco(cfg.DATA.BASEDIR)  # add COCO datasets to the registry
     register_balloon(cfg.DATA.BASEDIR)  # add the demo balloon datasets to the registry
     register_text(cfg.DATA.BASEDIR)
+    register_text_train(cfg.DATA.BASEDIR)
 
     # Setup logging ...
     is_horovod = cfg.TRAINER == 'horovod'
@@ -106,7 +108,7 @@ if __name__ == '__main__':
     if 'S3_ENDPOINT' in os.environ.keys():
         from utils.obs_sync import Sync
         callbacks.append(PeriodicCallback(
-            Sync(args.logdir,'s3://bucket-63-ocr/lupu/log/'+args.logdir.split('/')[-1]),
+            Sync(args.logdir,'s3://bucket-ocr-beijing4/lupu/log/'+args.logdir.split('/')[-1]),
             every_k_steps=cfg.TRAIN.CHECKPOINT_PERIOD)
         )
 

@@ -3,6 +3,7 @@ import os
 from os import path
 import numpy as np
 import json
+import shutil
 from dataset import DatasetSplit, DatasetRegistry
 from dataset.eval_tools.eval import eval_result
 
@@ -14,6 +15,7 @@ class TextDection(DatasetSplit):
         # assert split in ["train", "test"]
         base_dir = os.path.expanduser(base_dir)
         self.base_dir = base_dir
+        self.split = split
         # self.imgdir = os.path.join(base_dir, split)
         # assert os.path.isdir(self.imgdir), self.imgdir
     
@@ -26,8 +28,12 @@ class TextDection(DatasetSplit):
         else:
             allfiles = [os.path.join(root,f) for root,dirs,files in os.walk(self.base_dir) for f in files]
             # 'bmp','BMP'
+            # TODO 'general_table' 的标签格式并不一致
             imgpath_list = [fname \
-                for fname in allfiles if fname.endswith(('.jpg','.JPG','.JPEG','.PNG','.png','.jpeg'))]
+                for fname in allfiles if (fname.endswith(('.jpg','.JPG','.JPEG','.PNG','.png','.jpeg')) )]
+                # and 'general_table' not in fname
+                # and 'quota_invoice' not in fname
+            # and 'waybill_electronic' not in fname and 'ID_card' not in fname and 'quota_invoice' not in fname
             img_gt_lst = [(img_pth,os.path.splitext(img_pth)[0]+'.txt') for img_pth in imgpath_list]
         ret = []
         for image_id,sampe_line in enumerate(img_gt_lst):
@@ -43,6 +49,11 @@ class TextDection(DatasetSplit):
                 continue
             roidb = {"file_name": fname}
             roidb['image_id'] = image_id
+            if not with_gt:
+                # if image_id>1000:
+                #     break
+                ret.append(roidb)
+                continue
 
             boxes = []
             segs = []
@@ -80,16 +91,22 @@ class TextDection(DatasetSplit):
         
 
     def training_roidbs(self):
-        return self.load('train',with_gt=True)
+        return self.load(self.split,with_gt=True)
 
     def inference_roidbs(self):
-        return self.load('test',with_gt=True)
+        return self.load(self.split,with_gt=False)
     
     def eval_inference_results(self, results, output=None):
         # import pudb; pudb.set_trace()
         if not os.path.isdir(output):
             # os.removedirs(output)
             os.makedirs(output)
+        else:
+            os.system(f'rm -r {output}')
+        pre_outputs = os.path.join(output,'pred')
+        gts_dir = os.path.join(output,'gt')
+        os.makedirs(pre_outputs)
+        os.makedirs(gts_dir)
         for idx,res_per_img in enumerate(results):
             lines = []
             for b_idx, instance in enumerate(res_per_img):
@@ -106,14 +123,19 @@ class TextDection(DatasetSplit):
 
             if len(res_per_img)>0:
                 image_name=os.path.basename(res_per_img[0]['image_id'])
-                filename=os.path.join(output,image_name.split('.')[0]+'.txt')
+                apx = image_name.split('.')[-1]
+                # filename=os.path.join(pre_outputs,image_name.replace(apx,'txt'))
+                filename=os.path.join(pre_outputs,f'{idx}.txt')
 
                 with open(filename,'w') as f:
                     for line in lines:
                         f.write(line)
 
+                shutil.copyfile(res_per_img[0]['image_id'].replace(apx,'txt'),
+                    os.path.join(gts_dir,f'{idx}.txt'))
+
         # import pudb; pudb.set_trace()
-        res = eval_result(output,self.base_dir)
+        res = eval_result(pre_outputs,gts_dir)
 
         return res
         # if len(results):
@@ -128,14 +150,63 @@ def register_text(basedir):
         DatasetRegistry.register(name, lambda x=split: TextDection(basedir, x))
         DatasetRegistry.register_metadata(name, "class_names", ["BG", "Text"])
 
-def register_text_full(basedir):
-    dataset_list = ['zhongyuan','insurance_form','jinyu_medical','pufa_v2','tiny_invoice','lading_bill','zhongyuan_v2','credit_real_pufa','train_tickets','train_tickets_1023','zhongchuang','taobao_text','gaopaiyi','financial_statement','zhongchuang_v2','Docs_elec','table_text','tiny_docs','pufa_gen_1022','gen_doc_1021']
+def register_text_train(basedir):
+    dataset_list = [
+        'zhongyuan',
+        'insurance_form',
+        'jinyu_medical',
+        'pufa_v2',
+        'tiny_invoice',
+        'lading_bill',
+        'zhongyuan_v2',
+        'credit_real_pufa',
+        'zhongchuang',
+        'taobao_text',
+        'gaopaiyi',
+        'financial_statement',
+        'zhongchuang_v2',
+        'quota_invoice',
+        'Docs_elec',
+        'table_text',
+        'gen_doc_1214',
+        'gen_doc_1221',
+        'pufa_gen_1022',
+    ]
     for idx,split in enumerate(dataset_list):
-        name = f'general_text_{idx}'
+        name = f'text_train_{idx}'
         path = os.path.join(basedir,split)
         # DatasetRegistry.register(name, lambda x=split: TextDection(path, x))
         DatasetRegistry.register(name,lambda x=path: TextDection(x, ''))
         DatasetRegistry.register_metadata(name, "class_names", ["BG", "Text"])
+        DatasetRegistry.register_metadata(name, "dataset_names", dataset_list[idx])
+
+def register_test(basedir):
+    dataset_list = [
+        'zhongyuan',
+        'insurance_form',
+        'pufa_v2',
+        'zhongyuan_v2',
+        'Docs_elec',
+        # 'train_tickets_pre_other',
+        'credit_real_test',
+        'pufa_gen_1022',
+        # 'taobao_text',
+        # 'gen_doc_1021',
+        'financial_statement',
+        'gaopaiyi',
+        'zhongchuang_v2',
+        'general_table',
+        # 'douyu',
+        # 'ID_card',
+        # 'waybill_electronic',
+    ]
+    for idx,split in enumerate(dataset_list):
+        name = f'text_{idx}'
+        path = os.path.join(basedir,split)
+        # DatasetRegistry.register(name, lambda x=split: TextDection(path, x))
+        DatasetRegistry.register(name,lambda x=path: TextDection(x, ''))
+        DatasetRegistry.register_metadata(name, "class_names", ["BG", "Text"])
+        DatasetRegistry.register_metadata(name, "dataset_names", dataset_list[idx])
 
 if __name__ == '__main__':
     basedir = '/home/lupu/27_screenshot/'

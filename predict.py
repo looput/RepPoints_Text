@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import argparse
+
+from cv2 import data
+from dataset.text import register_text_train,register_test
 import itertools
 import numpy as np
 import os
@@ -85,6 +88,9 @@ def do_evaluate(pred_config, output_file):
     graph_funcs = MultiTowerOfflinePredictor(
         pred_config, list(range(num_tower))).get_predictors()
 
+    res_path = os.path.join(os.path.split(output_file)[0],'result.txt')
+    f = open(res_path,'w')
+    final_res = {'tp':0, 'fp':0, 'npos':0}
     for dataset in cfg.DATA.VAL:
         logger.info("Evaluating {} ...".format(dataset))
         dataflows = [
@@ -92,19 +98,42 @@ def do_evaluate(pred_config, output_file):
             for k in range(num_tower)]
         all_results = multithread_predict_dataflow(dataflows, graph_funcs)
         output = output_file + '-' + dataset
-        DatasetRegistry.get(dataset).eval_inference_results(all_results, output)
-
+        name = DatasetRegistry.get_metadata(dataset,'dataset_names')
+        print(name)
+        res = DatasetRegistry.get(dataset).eval_inference_results(all_results, output)
+        p,r,h = res['precision'],res['recall'],res['hmean']
+        f.write(f'{name}, {p:0.4}, {r:0.4}, {h:0.4}\r\n')
+        for k in final_res.keys():
+            final_res[k]+=res[k]
+        print(res)
+    
+    tp,fp,npos = final_res['tp'],final_res['fp'],final_res['npos']
+    precision = tp / (tp + fp)
+    recall = tp / npos
+    hmean = 0 if (precision + recall) == 0 else 2.0 * precision * recall / (precision + recall)
+    print('----------')
+    print('Final res, P,R,F ','%.4f %.4f %.4f'%(precision,recall,hmean))
+    f.write(f'total_res, {precision:0.4}, {recall:0.4}, {hmean:0.4}\r\n')
 
 def do_predict(pred_func, input_file):
     img = cv2.imread(input_file, cv2.IMREAD_COLOR)
-    results = predict_image(img, pred_func)
+    # from common import CusRotation
+    # rotator = CusRotation(2,(0.5,0.5),border=cv2.BORDER_CONSTANT,border_value=[123.675, 116.28, 103.53])
+    # img = rotator.augment(img)
+    import time
+    results = predict_image(img, pred_func,time.time())
     if cfg.MODE_MASK:
         final = draw_final_outputs_blackwhite(img, results)
     else:
         final = draw_final_outputs(img, results)
     viz =final
     # viz = np.concatenate((img, final), axis=1)
-    cv2.imwrite("output.png", viz)
+    nm = os.path.basename(input_file).replace('.jpg','.png')
+    folder = input_file.split('/')[-2]
+    path = f'/home/lupu/shared_space/lupu/TF-LOG/img_log/{folder}'
+    if not os.path.isdir(path):
+        os.makedirs(path)
+    # cv2.imwrite(path+f"/{nm}", viz)
     logger.info("Inference output for {} written to output.png".format(input_file))
     tpviz.interactive_imshow(viz)
 
@@ -129,6 +158,8 @@ if __name__ == '__main__':
     register_coco(cfg.DATA.BASEDIR)  # add COCO datasets to the registry
     register_balloon(cfg.DATA.BASEDIR)
     register_text(cfg.DATA.BASEDIR)
+    register_test(cfg.DATA.BASEDIR)
+    register_text_train(cfg.DATA.BASEDIR)
 
     MODEL = RepPointsFPNDet() if cfg.MODE_FPN else ResNetC4Model()
 
@@ -136,7 +167,7 @@ if __name__ == '__main__':
         from tensorflow.python.framework import test_util
         assert get_tf_version_tuple() >= (1, 7) and test_util.IsMklEnabled(), \
             "Inference requires either GPU support or MKL support!"
-    assert args.load
+    # assert args.load
     finalize_configs(is_training=False)
 
     if args.predict or args.visualize:
