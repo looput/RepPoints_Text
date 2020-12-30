@@ -2,7 +2,7 @@
 # File: data.py
 
 import copy
-from dataset.text import register_text,register_text_full
+from dataset.text import register_text,register_text_train,register_test
 import itertools
 import numpy as np
 import cv2
@@ -22,12 +22,14 @@ from modeling.model_fpn import get_all_anchors_fpn
 from common import (
     CustomResize,Random_Resize ,DataFromListOfDict, box_to_point4,
     filter_boxes_inside_shape, np_iou, point4_to_box, polygons_to_mask,
+    CusRotation
 )
 from config import config as cfg
 from dataset import DatasetRegistry, register_coco, register_text
 from utils.np_box_ops import area as np_area
 from utils.np_box_ops import ioa as np_ioa
 from utils.polygons import expand_point
+from dataset.dataset import RatioDataFromList
 
 import tensorpack.utils.viz as tpviz
 
@@ -82,8 +84,13 @@ class TrainingDataPreprocessor:
         self.cfg = cfg
         self.aug = imgaug.AugmentorList([
             # CustomResize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE),
-            Random_Resize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE),
+            CusRotation(2,(0.5,0.5),border=cv2.BORDER_CONSTANT,border_value=[123.675, 116.28, 103.53]),
+            Random_Resize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE,ratios=(1.,1.)),
             # imgaug.Flip(horiz=True)
+            # imgaug.GaussianNoise(),
+            # imgaug.Brightness(25),
+            # imgaug.Saturation(0.2),
+            # imgaug.Hue((-10,10)),
         ])
 
     def __call__(self, roidb):
@@ -189,7 +196,7 @@ class TrainingDataPreprocessor:
             ret['gt_polygons'] = polygons
 
             # TODO 将target 生成的代码移动到模型的代码部分，并且由配置文件来管理这些target
-            strides = (8,16,32)
+            strides = cfg.FPN.STRIDES
             # 在数据预处理阶段生成GT, 在训练过程中会稍微复杂点
             mlvl_points_inputs = self.get_point_target(im,boxes,polygons,is_crowd,strides)
             for i, (point_labels,point_targets) in enumerate(mlvl_points_inputs):
@@ -464,21 +471,40 @@ def get_train_dataflow():
     If MODE_MASK, gt_masks: (N, h, w)
     if MODE_POLYGON, gt_polygons: (N,2*np)
     """
-    roidbs = list(itertools.chain.from_iterable(DatasetRegistry.get(x).training_roidbs() for x in cfg.DATA.TRAIN))
-    print_class_histogram(roidbs)
+    if not cfg.DATA.RATIO:
+        roidbs = list(itertools.chain.from_iterable(DatasetRegistry.get(x).training_roidbs() for x in cfg.DATA.TRAIN))
+        print_class_histogram(roidbs)
 
-    # Filter out images that have no gt boxes, but this filter shall not be applied for testing.
-    # The model does support training with empty images, but it is not useful for COCO.
-    num = len(roidbs)
-    if cfg.DATA.FILTER_EMPTY_ANNOTATIONS:
-        roidbs = list(filter(lambda img: len(img["boxes"][img["is_crowd"] == 0]) > 0, roidbs))
-    logger.info(
-        "Filtered {} images which contain no non-crowd groudtruth boxes. Total #images for training: {}".format(
-            num - len(roidbs), len(roidbs)
+        # Filter out images that have no gt boxes, but this filter shall not be applied for testing.
+        # The model does support training with empty images, but it is not useful for COCO.
+        num = len(roidbs)
+        if cfg.DATA.FILTER_EMPTY_ANNOTATIONS:
+            roidbs = list(filter(lambda img: len(img["boxes"][img["is_crowd"] == 0]) > 0, roidbs))
+        logger.info(
+            "Filtered {} images which contain no non-crowd groudtruth boxes. Total #images for training: {}".format(
+                num - len(roidbs), len(roidbs)
+            )
         )
-    )
+        ds = DataFromList(roidbs, shuffle=True)
+    else:
+        roidbs_list = [DatasetRegistry.get(x).training_roidbs() for x in cfg.DATA.TRAIN]
+        roidbs_filter = []
+        for roidbs in roidbs_list:
+            print_class_histogram(roidbs)
 
-    ds = DataFromList(roidbs, shuffle=True)
+            # Filter out images that have no gt boxes, but this filter shall not be applied for testing.
+            # The model does support training with empty images, but it is not useful for COCO.
+            num = len(roidbs)
+            if cfg.DATA.FILTER_EMPTY_ANNOTATIONS:
+                roidbs = list(filter(lambda img: len(img["boxes"][img["is_crowd"] == 0]) > 0, roidbs))
+            logger.info(
+                "Filtered {} images which contain no non-crowd groudtruth boxes. Total #images for training: {}".format(
+                    num - len(roidbs), len(roidbs)
+                )
+            )
+            roidbs_filter.append(roidbs)
+
+        ds = RatioDataFromList(roidbs_filter, shuffle=True,ratio=True)
 
     preprocess = TrainingDataPreprocessor(cfg)
 
@@ -527,11 +553,13 @@ if __name__ == "__main__":
     from config import finalize_configs
     
     from config import config as cfg
-    cfg.DATA.TRAIN = [f'general_text_{i}' for i in range(10)] 
+    # cfg.DATA.TRAIN = [f'general_text_{i}' for i in range(10)] 
     cfg.DATA.NUM_WORKERS=0
+    cfg.DATA.RATIO=True
 
     # register_coco(os.path.expanduser("~/data/coco"))
-    register_text_full('/home/lupu/27_screenshot/')
+    register_test('/home/lupu/27_screenshot/test_data')
+    register_text_train('/home/lupu/27_screenshot/')
     finalize_configs(True)
 
     # import pudb; pudb.set_trace()
@@ -539,12 +567,13 @@ if __name__ == "__main__":
     # ds = PrintData(ds, 10)
     # TestDataSpeed(ds, 50000).start()
     ds.reset_state()
-    cv2.namedWindow('img',1)
+    # cv2.namedWindow('img',1)
     for ret in ds:
         import viz
         import matplotlib.pyplot as plt
         # img = viz.draw_annotation(ret['image'],ret['gt_boxes'],ret['gt_labels'],ret['gt_polygons'].reshape(-1,16))
         img_show = ret['image'].astype(np.uint8)
+        print(ret.keys())
         for index_gt, box in enumerate(ret['gt_polygons']):
             box=box.astype(np.int32).reshape(-1,2)
             color_l=[(255,255,255),(0,0,255),(255,255,0),(255,0,0)]

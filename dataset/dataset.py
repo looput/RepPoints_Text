@@ -119,3 +119,34 @@ class DatasetRegistry():
             value
         """
         return DatasetRegistry._metadata_registry[name][key]
+
+from tensorpack.dataflow.base import RNGDataFlow
+
+class RatioDataFromList(RNGDataFlow):
+    """ Wrap a list of datapoints to a DataFlow"""
+
+    def __init__(self, lst, shuffle=True, ratio=False):
+        """
+        Args:
+            lst (list): input list. Each element is a datapoint.
+            shuffle (bool): shuffle data.
+        """
+        # TODO 支持比例控制
+        super(RatioDataFromList, self).__init__()
+        self.lst = lst
+        self.shuffle = shuffle
+        self.ratio = ratio
+
+    def __len__(self):
+        return len(self.lst)
+
+    def __iter__(self):
+        if not self.shuffle and not self.ratio:
+            yield from self.lst
+        else:
+            num = sum([len(lst) for lst in self.lst])
+            for _ in range(num):
+                ii = self.rng.randint(len(self.lst))
+                if len(self.lst[ii])>0:
+                    idx = self.rng.randint(len(self.lst[ii]))
+                    yield self.lst[ii][idx]
