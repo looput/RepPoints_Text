@@ -2,6 +2,7 @@
 # File: viz.py
 
 import numpy as np
+import cv2
 
 from tensorpack.utils import viz
 from tensorpack.utils.palette import PALETTE_RGB
@@ -30,7 +31,7 @@ def draw_annotation(img, boxes, klass, polygons=None, is_crowd=None):
 
     if polygons is not None:
         for p in polygons:
-            mask = polygons_to_mask(p, img.shape[0], img.shape[1])
+            mask = polygons_to_mask([p], img.shape[0], img.shape[1])
             img = draw_mask(img, mask)
     return img
 
@@ -78,6 +79,7 @@ def draw_final_outputs(img, results):
 
     # Display in largest to smallest order to reduce occlusion
     boxes = np.asarray([r.box for r in results])
+    polygons = np.asarray([r.polygons for r in results])
     areas = np_area(boxes)
     sorted_inds = np.argsort(-areas)
 
@@ -92,9 +94,41 @@ def draw_final_outputs(img, results):
     for r in results:
         tags.append(
             "{},{:.2f}".format(cfg.DATA.CLASS_NAMES[r.class_id], r.score))
-    ret = viz.draw_boxes(ret, boxes, tags)
+    # ret = viz.draw_boxes(ret, boxes, tags)
+    ret = draw_polygons(ret, polygons, tags)
     return ret
 
+
+def draw_polygons(im, boxes, labels=None, color=None):
+    """
+    Args:
+        im (np.ndarray): a BGR image in range [0,255]. It will not be modified.
+        boxes (np.ndarray): a numpy array of shape Nx4 where each row is [x1, y1, x2, y2].
+        labels: (list[str] or None)
+        color: a 3-tuple BGR color (in range [0, 255])
+
+    Returns:
+        np.ndarray: a new image.
+    """
+    boxes = np.asarray(boxes, dtype='int32')
+    if labels is not None:
+        assert len(labels) == len(boxes), "{} != {}".format(len(labels), len(boxes))
+
+    im = im.copy()
+
+    if im.ndim == 2 or (im.ndim == 3 and im.shape[2] == 1):
+        im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
+    for i in range(len(boxes)):
+        box = boxes[i, :]
+        # if labels is not None:
+        #     im = viz.draw_text(im, (box[0][0], box[0][1]), labels[i], color=(15, 128, 15))
+        # if color is None:
+        color = PALETTE_RGB[np.random.choice(len(PALETTE_RGB))][::-1]
+        # color  = (int(color[0]),int(color[1]),int(color[2]))
+        color  = (0,0,255)
+        cv2.drawContours(im, [box],-1,
+                      color=color, thickness=2)
+    return im
 
 def draw_final_outputs_blackwhite(img, results):
     """

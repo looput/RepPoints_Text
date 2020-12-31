@@ -135,7 +135,14 @@ def do_predict(pred_func, input_file):
         os.makedirs(path)
     # cv2.imwrite(path+f"/{nm}", viz)
     logger.info("Inference output for {} written to output.png".format(input_file))
-    tpviz.interactive_imshow(viz)
+    cv2.namedWindow('img_show',0)
+    cv2.imshow('img_show',viz)
+    key = cv2.waitKey()
+    key = chr(key & 0xff)
+    if key == 'q':
+        import sys
+        sys.exit()
+    # tpviz.interactive_imshow(viz)
 
 
 if __name__ == '__main__':

@@ -22,7 +22,7 @@ from tensorpack.callbacks import Callback
 from tensorpack.tfutils.common import get_tf_version_tuple
 from tensorpack.utils import logger, get_tqdm
 
-from common import CustomResize, clip_boxes,Random_Resize,Resize
+from common import CustomResize, clip_boxes,Random_Resize,Resize,CusRotation
 from config import config as cfg
 from data import get_eval_dataflow
 from dataset import DatasetRegistry
@@ -111,7 +111,7 @@ def _paste_mask(box, mask, shape):
         return ret
 
 
-def predict_image(img, model_func):
+def predict_image(img, model_func,t0=0.):
     """
     Run detection on one image, using the TF callable.
     This function should handle the preprocessing internally.
@@ -129,15 +129,13 @@ def predict_image(img, model_func):
     resized_img = resizer.augment(img)
     scale_h,scale_w = (resized_img.shape[0] * 1.0 / img.shape[0], resized_img.shape[1] / img.shape[1])
     # boxes, probs, labels, *masks = model_func(resized_img)
-    t0 = tim.time()
     boxes, labels, *polygons = model_func(resized_img)
-    # print('Time:',tim.time()-t0)
+    # print('Time:',tim.time()-t0,polygons[0].shape)
     probs = boxes[:,4]
     boxes = boxes[:,:4]
 
     # orig_shape = resized_img.shape[:2]
     # Some slow numpy postprocessing:
-    # 
     boxes = boxes / np.array([scale_w,scale_h,scale_w,scale_h])
     # boxes are already clipped inside the graph, but after the floating point scaling, this may not be true any more.
     boxes = clip_boxes(boxes, orig_shape)
@@ -148,7 +146,7 @@ def predict_image(img, model_func):
     for p in polygons[0]:
         p = p/np.array([scale_w,scale_h])
         p = np.concatenate((p[:4,:],np.flip(p[5:,:],axis=0)),axis=0)
-        masks.append(polygons_to_mask([p], orig_shape[0], orig_shape[1]))
+        # masks.append(polygons_to_mask([p], orig_shape[0], orig_shape[1]))
         re_polygons.append(p)
 
     # if masks:
@@ -157,7 +155,7 @@ def predict_image(img, model_func):
     #     masks = full_masks
     # else:
     #     # fill with none
-    # masks = [None] * len(boxes)
+    masks = [None] * len(boxes)
 
     results = [DetectionResult(*args) for args in zip(boxes, probs, labels.tolist(), masks,re_polygons)]
     return results
@@ -183,7 +181,9 @@ def predict_dataflow(df, model_func, tqdm_bar=None):
         if tqdm_bar is None:
             tqdm_bar = stack.enter_context(get_tqdm(total=df.size()))
         for img, img_id in df:
-            results = predict_image(img, model_func)
+            import time
+            t0 = time.time()
+            results = predict_image(img, model_func,t0)
             res_per_img = []
             for r in results:
                 # int()/float() to make it json-serializable
