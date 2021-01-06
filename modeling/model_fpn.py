@@ -19,7 +19,7 @@ from .model_rpn import generate_rpn_proposals, rpn_losses, get_all_anchors
 
 
 @layer_register(log_shape=True)
-def fpn_model(features):
+def fpn_model(features,start_lvl=2):
     """
     Args:
         features ([tf.Tensor]): ResNet features c2-c5
@@ -49,24 +49,72 @@ def fpn_model(features):
     with argscope(Conv2D, data_format='channels_first',
                   activation=tf.identity, use_bias=True,
                   kernel_initializer=tf.variance_scaling_initializer(scale=1.)):
-        lat_2345 = [Conv2D('lateral_1x1_c{}'.format(i + 2), c, num_channel, 1)
-                    for i, c in enumerate(features)]
+        lat_345 = [Conv2D('lateral_1x1_c{}'.format(i + 2), c, num_channel, 1)
+                    for i, c in enumerate(features) if i>=(start_lvl-2)]
         if use_gn:
-            lat_2345 = [GroupNorm('gn_c{}'.format(i + 2), c) for i, c in enumerate(lat_2345)]
+            lat_2345 = [GroupNorm('gn_c{}'.format(i + start_lvl), c) for i, c in enumerate(lat_345)]
+        lat_sum_543 = []
+        for idx, lat in enumerate(lat_345[::-1]):
+            if idx == 0:
+                lat_sum_543.append(lat)
+            else:
+                lat = lat + upsample2x('upsample_lat{}'.format(6 - idx), lat_sum_543[-1])
+                lat_sum_543.append(lat)
+        p345 = [Conv2D('posthoc_3x3_p{}'.format(i + start_lvl), c, num_channel, 3)
+                 for i, c in enumerate(lat_sum_543[::-1])]
+        if use_gn:
+            p345 = [GroupNorm('gn_p{}'.format(i + start_lvl), c) for i, c in enumerate(p345)]
+        p6 = MaxPooling('maxpool_p6', p345[-1], pool_size=1, strides=2, data_format='channels_first', padding='VALID')
+        return p345 + [p6]
+
+
+def fpn_lite_model(features):
+    """
+    Args:
+        features ([tf.Tensor]): ResNet features c2-c5
+
+    Returns:
+        [tf.Tensor]: FPN features p3-p6
+    """
+    assert len(features) == 4, features
+    num_channel = cfg.FPN.NUM_CHANNEL
+
+    use_gn = cfg.FPN.NORM == 'GN'
+
+    def upsample2x(name, x):
+        try:
+            resize = tf.compat.v2.image.resize_images
+            with tf.name_scope(name):
+                shp2d = tf.shape(x)[2:]
+                x = tf.transpose(x, [0, 2, 3, 1])
+                x = resize(x, shp2d * 2, 'nearest')
+                x = tf.transpose(x, [0, 3, 1, 2])
+                return x
+        except AttributeError:
+            return FixedUnPooling(
+                name, x, 2, unpool_mat=np.ones((2, 2), dtype='float32'),
+                data_format='channels_first')
+
+    with argscope(Conv2D, data_format='channels_first',
+                  activation=tf.identity, use_bias=True,
+                  kernel_initializer=tf.variance_scaling_initializer(scale=1.)):
+        lat_2345 = [Conv2D('lateral_1x1_c{}'.format(i + 2), c, num_channel, 1)
+                    for i, c in enumerate(features) if i>0]
+        if use_gn:
+            lat_2345 = [GroupNorm('gn_c{}'.format(i + 3), c) for i, c in enumerate(lat_2345)]
         lat_sum_5432 = []
-        for idx, lat in enumerate(lat_2345[::-1]):
+        for idx, lat in enumerate(lat_2345[3:0:-1]):
             if idx == 0:
                 lat_sum_5432.append(lat)
             else:
                 lat = lat + upsample2x('upsample_lat{}'.format(6 - idx), lat_sum_5432[-1])
                 lat_sum_5432.append(lat)
-        p2345 = [Conv2D('posthoc_3x3_p{}'.format(i + 2), c, num_channel, 3)
+        p2345 = [Conv2D('posthoc_3x3_p{}'.format(i + 3), c, num_channel, 3)
                  for i, c in enumerate(lat_sum_5432[::-1])]
         if use_gn:
-            p2345 = [GroupNorm('gn_p{}'.format(i + 2), c) for i, c in enumerate(p2345)]
+            p2345 = [GroupNorm('gn_p{}'.format(i + 3), c) for i, c in enumerate(p2345)]
         p6 = MaxPooling('maxpool_p6', p2345[-1], pool_size=1, strides=2, data_format='channels_first', padding='VALID')
-        return p2345 + [p6]
-
+        return [p6,]+p2345 + [p6]
 
 @under_name_scope()
 def fpn_map_rois_to_levels(boxes):
