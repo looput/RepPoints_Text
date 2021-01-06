@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import argparse
+import yaml
 
-from cv2 import data
 from dataset.text import register_text_train,register_test
 import itertools
 import numpy as np
@@ -130,7 +130,7 @@ def do_predict(pred_func, input_file):
     # viz = np.concatenate((img, final), axis=1)
     nm = os.path.basename(input_file).replace('.jpg','.png')
     folder = input_file.split('/')[-2]
-    path = f'/home/lupu/shared_space/lupu/TF-LOG/img_log/{folder}'
+    path = f'/home/lupu/shared_space/lupu/TF-LOG/img_log_lite/{folder}'
     if not os.path.isdir(path):
         os.makedirs(path)
     # cv2.imwrite(path+f"/{nm}", viz)
@@ -156,10 +156,15 @@ if __name__ == '__main__':
     parser.add_argument('--benchmark', action='store_true', help="Benchmark the speed of the model + postprocessing")
     parser.add_argument('--config', help="A list of KEY=VALUE to overwrite those defined in config.py",
                         nargs='+')
+    parser.add_argument('--config_file', help="json file store config")
     parser.add_argument('--output-pb', help='Save a model to .pb')
     parser.add_argument('--output-serving', help='Save a model to serving file')
 
     args = parser.parse_args()
+    if args.config_file:
+        with open(args.config_file,'r') as f:
+            dict_cfg = yaml.load(f)
+        cfg.from_dict(dict_cfg)
     if args.config:
         cfg.update_args(args.config)
     register_coco(cfg.DATA.BASEDIR)  # add COCO datasets to the registry

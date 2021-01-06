@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # File: train.py
-
+import yaml
 import argparse
 from dataset.text import register_test,register_text_train
 
@@ -39,8 +39,13 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', help='Log directory. Will remove the old one if already exists.',
                         default='train_log/maskrcnn')
     parser.add_argument('--config', help="A list of KEY=VALUE to overwrite those defined in config.py", nargs='+')
+    parser.add_argument('--config_file', help="json file store config")
 
     args = parser.parse_args()
+    if args.config_file:
+        with open(args.config_file,'r') as f:
+            dict_cfg = yaml.load(f)
+        cfg.from_dict(dict_cfg)
     if args.config:
         cfg.update_args(args.config)
     register_coco(cfg.DATA.BASEDIR)  # add COCO datasets to the registry
