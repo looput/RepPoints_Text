@@ -84,7 +84,7 @@ class TrainingDataPreprocessor:
         self.cfg = cfg
         self.aug = imgaug.AugmentorList([
             # CustomResize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE),
-            CusRotation(2,(0.5,0.5),border=cv2.BORDER_CONSTANT,border_value=[123.675, 116.28, 103.53]),
+            CusRotation(cfg.PREPROC.ANGLE,(0.5,0.5),border=cv2.BORDER_CONSTANT,border_value=[123.675, 116.28, 103.53]),
             Random_Resize(cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE,ratios=(1.,1.)),
             # imgaug.Flip(horiz=True)
             # imgaug.GaussianNoise(),
@@ -433,6 +433,7 @@ class TrainingDataPreprocessor:
             gt_wh = gt_bboxes_wh[b_idx]
             gt_poly = gt_polygons[b_idx]
 
+            # print(gt_wh,lvl)
             point_gt_dist = np.linalg.norm((lvl_points-gt_point[np.newaxis,:])/gt_wh[np.newaxis,:],axis=1)
             min_index = np.argmin(point_gt_dist)
             # 对于crowd样本直接忽略
@@ -556,6 +557,9 @@ if __name__ == "__main__":
     # cfg.DATA.TRAIN = [f'general_text_{i}' for i in range(10)] 
     cfg.DATA.NUM_WORKERS=0
     cfg.DATA.RATIO=True
+    cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE=[540,1200]
+    cfg.PREPROC.MAX_SIZE=1800
+    cfg.DATA.TRAIN=['text_train_1']
 
     # register_coco(os.path.expanduser("~/data/coco"))
     register_test('/home/lupu/27_screenshot/test_data')
@@ -582,7 +586,11 @@ if __name__ == "__main__":
                 cv2.putText(img_show,'%d'%index,(point[0],point[1]),cv2.FONT_HERSHEY_SIMPLEX,0.4,color_l[1],1)
         # plt.imshow(img_show)
         cv2.imshow('img',img_show)
-        cv2.waitKey()
+        key = cv2.waitKey()
+        key = chr(key & 0xff)
+        if key == 'q':
+            import sys
+            sys.exit()
 
         # for i in range(3):
         #     plt.figure(f'point_labels_lvl_{i}')

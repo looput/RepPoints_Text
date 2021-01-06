@@ -157,7 +157,7 @@ def register_text_train(basedir):
         'jinyu_medical',
         'pufa_v2',
         'tiny_invoice',
-        'lading_bill',
+        # 'lading_bill',
         'zhongyuan_v2',
         'credit_real_pufa',
         'zhongchuang',
