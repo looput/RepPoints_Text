@@ -5,7 +5,7 @@ import numpy as np
 import json
 import shutil
 from dataset import DatasetSplit, DatasetRegistry
-from dataset.eval_tools.eval import eval_result
+from dataset.eval_tools.eval import eval_result, polygon_bbox
 
 __all__ = ["register_text"]
 
@@ -50,7 +50,7 @@ class TextDection(DatasetSplit):
             roidb = {"file_name": fname}
             roidb['image_id'] = image_id
             if not with_gt:
-                # if image_id>1000:
+                # if image_id>5:
                 #     break
                 ret.append(roidb)
                 continue
@@ -72,6 +72,10 @@ class TextDection(DatasetSplit):
 
                 maxxy = poly.max(axis=0)
                 minxy = poly.min(axis=0)
+
+                text = text.split('@')[0]
+                if text in ["arc_seal", "rect_seal", "watermark_cross", "arc_text", "dots", "hard"]:
+                    continue
 
                 boxes.append([minxy[0], minxy[1], maxxy[0], maxxy[1]])
                 segs.append([poly])
@@ -157,7 +161,7 @@ def register_text_train(basedir):
         'jinyu_medical',
         'pufa_v2',
         'tiny_invoice',
-        # 'lading_bill',
+        'lading_bill',
         'zhongyuan_v2',
         'credit_real_pufa',
         'zhongchuang',
@@ -185,7 +189,11 @@ def register_test(basedir):
         'zhongyuan',
         'insurance_form',
         'pufa_v2',
+        # 'pufa_v2/contract_all',
+        # 'pufa_v2/zhangcheng_all',
         'zhongyuan_v2',
+        # 'zhongyuan_v2/Hungary',
+        # 'zhongyuan_v2/Philippines',
         'Docs_elec',
         # 'train_tickets_pre_other',
         'credit_real_test',

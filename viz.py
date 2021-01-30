@@ -98,6 +98,40 @@ def draw_final_outputs(img, results):
     ret = draw_polygons(ret, polygons, tags)
     return ret
 
+def draw_gts(img,gt_fname):
+    reader = open(gt_fname).readlines()
+    rects = []
+    texts = []
+    for line in reader:
+        line=line.replace("\ufeff", "")
+
+        parts = line.strip().split(';')
+        num_parts = parts[1:-1]
+        num_parts = [nn for nn in num_parts if nn.isdigit()]
+        num_parts = num_parts[:(len(num_parts)//2)*2]
+        text = ''.join(parts[1+len(num_parts):])
+        rects.append([int(n) for n in num_parts])
+        texts.append(text)
+
+        poly = np.asarray(num_parts, dtype=np.float32)
+        poly = poly.reshape(-1,2)+0.5
+
+        poly = np.asarray(poly, dtype='int32')
+        cv2.drawContours(img, [poly],-1,
+                      color=(0,255,0), thickness=1)
+    # draw merge GT
+    # from dataset.eval_tools.utils import merge
+    
+    # rects,_,_ = merge(rects,texts,[0 for i in range(len(texts))])
+    # for rect in rects:
+    #     poly = np.asarray(rect,dtype=np.float32)
+    #     poly = poly.reshape(-1,2)+2
+
+    #     poly = np.asarray(poly, dtype='int32')
+    #     cv2.drawContours(img, [poly],-1,
+    #                   color=(255,255,0), thickness=1)
+
+    return img
 
 def draw_polygons(im, boxes, labels=None, color=None):
     """

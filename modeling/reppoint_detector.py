@@ -174,8 +174,11 @@ class SigleStageDet(ModelDesc):
             return total_cost
         else:
             result = self.postprocess(box_outs)
-            return result
+            # return result
 
+            # tf.profiler.profile(
+            #     tf.get_default_graph(),
+            #     options=tf.profiler.ProfileOptionBuilder.float_operation())
             # Check that the model defines the tensors it declares for inference
             # For existing models, they are defined in "fastrcnn_predictions(name_scope='output')"
             G = tf.get_default_graph()
@@ -252,26 +255,31 @@ def reppoints_head(feature_map,stride,num_points=9):
         cls_feat = feature_map
         pts_feat = feature_map
 
-        for i in range(2):
+        for i in range(cfg.REPPOINTS.CLS_CONVS):
             cls_feat = ConvModule(cls_feat,cfg.REPPOINTS.FEAT_DIMS,act='relu',name=f'cls_conv_{i}')
 
-        for i in range(2):
+        for i in range(cfg.REPPOINTS.PTS_CONVS):
             pts_feat = ConvModule(pts_feat,cfg.REPPOINTS.FEAT_DIMS,act='relu',name=f'pts_conv_{i}')
 
         x = ConvModule(pts_feat,cfg.REPPOINTS.FEAT_DIMS,with_norm=False,act='relu',name='pts_init_conv')
-        pts_out_init = ConvModule(x,2*num_points,(3,3),with_norm=False,act='',name='pts_init_out')# [b,2n,h,w]
+        pts_out_init = ConvModule(x,2*num_points,(1,1),with_norm=False,act='',name='pts_init_out')# [b,2n,h,w]
         
         gradient_mul = 0.1
         pts_out_init_detach = tf.stop_gradient(pts_out_init)*(1-gradient_mul)+pts_out_init*gradient_mul
         # classify
 
+        # base classifier
+        cls_init = None
+        # cls_init = ConvModule(cls_feat,cfg.DATA.NUM_CATEGORY,(1,1),with_norm=False,name='cls_init')
+
         dcn_offset = pts_out_init_detach - dcn_base_offset
-        cls_feat_dcn = DefConvModule(cls_feat,dcn_offset,128,with_norm=False,act='relu',name='cls_refine_dcn')
+        cls_feat_dcn = DefConvModule(cls_feat,dcn_offset,cfg.REPPOINTS.OUT_FEAT_DIMS,with_norm=False,act='relu',name='cls_refine_dcn')
         cls_out = ConvModule(cls_feat_dcn,cfg.DATA.NUM_CATEGORY,(1,1),with_norm=False,name='cls_out')
-        
+        # return cls_out,pts_out_init,pts_out_init,cls_init
+
         # print_op = tf.print("feat:", cls_feat,{1:cls_feat_dcn,2:cls_out}, output_stream=sys.stdout)
         # with tf.control_dependencies([print_op]):
-        pts_feat_dcn = DefConvModule(pts_feat,dcn_offset,128,with_norm=False,act='relu',name='pts_refine_dcn')
+        pts_feat_dcn = DefConvModule(pts_feat,dcn_offset,cfg.REPPOINTS.OUT_FEAT_DIMS,with_norm=False,act='relu',name='pts_refine_dcn')
         pts_out_refine = ConvModule(pts_feat_dcn,2*num_points,(1,1),with_norm=False,name='pts_refine')
 
         pts_out_refine = tf.math.add(tf.stop_gradient(pts_out_init),pts_out_refine,name='pts_refine_out')
@@ -281,7 +289,7 @@ def reppoints_head(feature_map,stride,num_points=9):
         # offset = ConvModule(pts_feat_dcn,2*num_points,(1,1),with_norm=False,name='pts_refine')
         # pts_out_refine = tf.math.add(tf.stop_gradient(pts_out_refine),offset,name='pts_refine_out')
 
-        return cls_out,pts_out_init,pts_out_refine
+        return cls_out,pts_out_init,pts_out_refine,cls_init
 
     # Dense RepPoint 
     # # point refine
@@ -380,10 +388,11 @@ class RepPointsFPNDet(SigleStageDet):
         else:
             model = Resnet_Model(cfg.BACKBONE.CUS,'channels_first')
             c2345 = model.output(image)
-        p23456 = fpn_model('fpn', c2345)
+        
         min_lvl = int(math.log(cfg.FPN.STRIDES[0],2)-2)
         max_lvl = int(math.log(cfg.FPN.STRIDES[-1],2)-2)
-        return p23456[min_lvl:max_lvl+1]
+        p23456 = fpn_model('fpn', c2345,min_lvl+2)
+        return p23456[:max_lvl+1]
 
     def box_head(self, features):
         # Multi-Level RPN Proposals]
@@ -394,8 +403,10 @@ class RepPointsFPNDet(SigleStageDet):
         mlvl_cls_out = [k[0] for k in reppoint_outputs]
         mlvl_pts_init_out = [k[1] for k in reppoint_outputs]
         mlvl_pts_refine_out = [k[2] for k in reppoint_outputs]
+        mlvl_cls_init_out = [k[3] for k in reppoint_outputs]
 
         return dict(
+            # cls_init_out = mlvl_cls_init_out,
             cls_outs=mlvl_cls_out,
             pts_init_outs=mlvl_pts_init_out,
             pts_refine_outs=mlvl_pts_refine_out
@@ -405,6 +416,7 @@ class RepPointsFPNDet(SigleStageDet):
         '''
         Args:
             box_outs: dict(
+                cls_init_out: ((n,nCls,h,w),(n,nCls,h',w'),...)
                 cls_outs: ((n,nCls,h,w),(n,nCls,h',w'),...)
                 pts_init_outs: ((n,nP,h,w),(n,nP,h',w'),...) [y first]
                 pts_refine_outs: ((n,nP,h,w),(n,nP,h',w'),...) [y first]
@@ -428,12 +440,26 @@ class RepPointsFPNDet(SigleStageDet):
         # decode the prediction
         pts_coord_init = self.offset_to_pts(center_list,box_outs['pts_init_outs']) # lvl first [(n,h*w,18)...] x first
         pts_coord_refine = self.offset_to_pts(center_list,box_outs['pts_refine_outs'])
+        cls_init_list = box_outs['cls_init_out'] if 'cls_init_out' in box_outs.keys() else None
 
         pts_init_loss = []
+        cls_init_loss = []
         num_total_init_sample =1e-6
         for idx,st in enumerate(cfg.FPN.STRIDES):
             pts_target_lvl = tf.reshape(targets[f'point_targets_lvl_{idx}'],(1,-1,18)) # (n,h,w,18)
             pts_label_lvl = tf.reshape(targets[f'point_labels_lvl_{idx}'],(1,-1,1)) # (n,h,w,1)
+
+            if cls_init_list is not None:
+                # 第一阶段分类loss, 还需进行调整
+                cls_init_lvl = cls_init_list[idx]
+                cls_init_lvl = tf.reshape(cls_init_lvl,(1,-1,1))
+                label_lvl = tf.cast(tf.greater(pts_label_lvl,0),tf.float32)
+                weights = tf.cast(tf.greater_equal(pts_label_lvl,0),tf.float32)
+                cls_loss_lvl = sigmoid_focalloss(cls_init_lvl,label_lvl,weights,gamma=2.0, alpha=0.25)
+                cls_loss_lvl = tf.reduce_mean(cls_loss_lvl)
+                cls_init_loss.append(cls_loss_lvl)
+            else:
+                cls_init_loss.append(0.)
 
             weights = tf.cast(tf.greater(pts_label_lvl,0),tf.float32)
             num_total_init_sample+=tf.reduce_sum(weights)
@@ -447,6 +473,8 @@ class RepPointsFPNDet(SigleStageDet):
             pts_init_lvl_loss = smooth_l1loss(pts_target_lvl/normalize_term,pts_coord_init_lvl/normalize_term,delta=0.11,weights=weights)
             pts_init_ls= tf.reduce_sum(pts_init_lvl_loss)
             pts_init_loss.append(pts_init_ls)
+        
+        cls_init_loss = tf.divide(tf.add_n(cls_init_loss),1.,name='loss/cls_init_loss')
         pts_init_loss=tf.divide(tf.add_n(pts_init_loss),num_total_init_sample,name='loss/pts_init_loss')
         
         # 第二阶段loss涉及到匹配
@@ -490,7 +518,7 @@ class RepPointsFPNDet(SigleStageDet):
             cls_loss_lvl = sigmoid_focalloss(cls_out_lvl,target_labels,cls_mask,gamma=2.0, alpha=0.25)
             # TODO 这个有效性还待验证
             # 对小目标的loss进行加强
-            if False:
+            if cfg.REPPOINTS.CLS_REWEI:
                 tg = tf.reshape(target_polygons,(1,-1,9,2))
                 dis = tf.reduce_max(tf.abs(tg - tg[:,:,4:5,:])+2.,axis=(2,3))
                 scale =  tf.math.log(dis)/tf.math.log(2.)
@@ -509,6 +537,16 @@ class RepPointsFPNDet(SigleStageDet):
             pts_coord_refine_lvl = tf.reshape(pts_coord_refine[idx],(1,-1,18))
             normalize_term = 4 * float(st)
             pts_refine_ls = smooth_l1loss(target_polygons/normalize_term,pts_coord_refine_lvl/normalize_term,delta=0.11,weights=weights)
+            if cfg.REPPOINTS.PTS_REWEI:
+                tg = tf.reshape(target_polygons,(1,-1,9,2))
+                dis = tf.reduce_max(tf.abs(tg - tg[:,:,4:5,:])+2.,axis=(2,3))
+                scale =  tf.math.log(dis)/tf.math.log(2.)
+                scale = tf.expand_dims(8./scale,-1)
+                pos_mask=tf.cast(tf.greater(target_labels,0),tf.float32)
+                # print_op = tf.print("scale:", tf.reduce_max(pos_mask*scale),tf.reduce_sum(pos_mask*scale)/tf.reduce_sum(pos_mask), output_stream=sys.stdout)
+                # with tf.control_dependencies([print_op]):
+                pts_refine_ls = pos_mask*scale*pts_refine_ls
+
             pts_refine_ls= tf.reduce_sum(pts_refine_ls)
             pts_refine_loss.append(pts_refine_ls)
         
@@ -517,8 +555,8 @@ class RepPointsFPNDet(SigleStageDet):
         
         # print(pts_init_loss,cls_loss,pts_refine_loss)
         # TODO 将各部分loss 添加至summary
-        add_moving_summary(pts_init_loss,cls_loss,pts_refine_loss,num_total_init_sample,num_total_sample)
-        return [pts_init_loss*0.5,cls_loss,pts_refine_loss*1]
+        add_moving_summary(cls_init_loss,pts_init_loss,cls_loss,pts_refine_loss,num_total_init_sample,num_total_sample)
+        return [cls_init_loss,pts_init_loss*0.5,cls_loss,pts_refine_loss*1]
 
     def poly_to_target(self,polygons):
         upper=polygons[:,0:4,:]
@@ -565,7 +603,6 @@ class RepPointsFPNDet(SigleStageDet):
         
         # 对于batch 模式，需要生成多个图像的，并且需要使用标志位确定图像的有效区域
         return mlvl_points
-        
 
     def points_formate(self,pts,target='pts',y_first=True):
         shape = tf.shape(pts)
@@ -582,12 +619,14 @@ class RepPointsFPNDet(SigleStageDet):
         '''
             为了和DCN适配，坐标使用y,x 后处理过程需要进行颠倒
             bbox_head_outs: dict
+                cls_init_out: multi lvl [(N,nCls,h,w),(N,nCls,h,w),..] # may not exist
                 cls_out: multi lvl [(N,nCls,h,w),(N,nCls,h,w),..]
                 pts_init_outs: [(N,np*2,h,w),(N,np*2,h,w),..]  
                 pts_refine_outs: [(N,np*2,h,w),(N,np*2,h,w),..]
         '''
         strides = cfg.FPN.STRIDES
         cls_outs = bbox_head_outs['cls_outs']
+        cls_init_outs = bbox_head_outs['cls_init_out'] if 'cls_init_out' in bbox_head_outs.keys() else None
         pts_refine_outs = bbox_head_outs['pts_refine_outs']
 
         point_generators = [PointGenerator() for _ in strides]
@@ -600,6 +639,7 @@ class RepPointsFPNDet(SigleStageDet):
         pts_refine_outs = [self.points_formate(pts_refine_outs[i]) for i in range(len(strides))]
         result = []
         for i_img in range(cls_outs[0].get_shape().as_list()[0]):
+            cls_init_list = [cls_init_outs[i][i_img,:,:,:] for i in range(len(strides))] if cls_init_outs is not None else None
             cls_score_list = [cls_outs[i][i_img,:,:,:] for i in range(len(strides))]
             pts_pred_list = [pts_refine_outs[i][i_img,:,:,:] for i in range(len(strides))]
 
@@ -614,6 +654,12 @@ class RepPointsFPNDet(SigleStageDet):
 
                 cls_score = tf.reshape(cls_score,[-1,cfg.DATA.NUM_CATEGORY])
                 scores = tf.sigmoid(cls_score)
+
+                if cls_init_list is not None:
+                    cls_init_score = tf.transpose(cls_init_list[i_lvl],perm=(1,2,0))
+                    cls_init_score = tf.reshape(cls_init_score,[-1,cfg.DATA.NUM_CATEGORY])
+                    # scores  = scores +tf.sigmoid(cls_init_score)
+                # scores = tf.sigmoid(cls_score)
                 pts_pred = tf.reshape(pts_pred,[-1,tf.shape(pts_pred)[-1]/2,2]) # [ns,9,2]
 
                 pts_pos_center = points[:,:2] 

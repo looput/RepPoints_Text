@@ -37,7 +37,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--load', help='Load a model to start training from. It overwrites BACKBONE.WEIGHTS')
     parser.add_argument('--logdir', help='Log directory. Will remove the old one if already exists.',
-                        default='train_log/maskrcnn')
+                        default='')
     parser.add_argument('--config', help="A list of KEY=VALUE to overwrite those defined in config.py", nargs='+')
     parser.add_argument('--config_file', help="json file store config")
 
@@ -58,7 +58,8 @@ if __name__ == '__main__':
     if is_horovod:
         hvd.init()
     if not is_horovod or hvd.rank() == 0:
-        logger.set_logger_dir(args.logdir, 'k')
+        log_dir = args.logdir if args.logdir is not '' else cfg.LOG_DIR
+        logger.set_logger_dir(log_dir, 'k')
     logger.info("Environment Information:\n" + collect_env_info())
 
     finalize_configs(is_training=True)
@@ -89,6 +90,9 @@ if __name__ == '__main__':
 
     # Create callbacks ...
     callbacks = [
+        # EnableCallbackIf(
+        #     GraphProfiler(dump_tracing=True, dump_event=True),
+        #     lambda self: self.trainer.global_step > 20 and self.trainer.global_step < 30),
         PeriodicCallback(
             ModelSaver(max_to_keep=10, keep_checkpoint_every_n_hours=1,checkpoint_dir=args.logdir),
             every_k_steps=cfg.TRAIN.CHECKPOINT_PERIOD),

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # File: eval.py
 
+from dataset.eval_tools.utils import merge
 import time as tim
 from datetime import time
 import itertools
@@ -110,6 +111,8 @@ def _paste_mask(box, mask, shape):
         ret[y0:y1 + 1, x0:x1 + 1] = mask
         return ret
 
+gc=0
+gt=0
 
 def predict_image(img, model_func,t0=0.):
     """
@@ -128,8 +131,17 @@ def predict_image(img, model_func,t0=0.):
     resizer = Resize(cfg.PREPROC.TEST_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE,True)
     resized_img = resizer.augment(img)
     scale_h,scale_w = (resized_img.shape[0] * 1.0 / img.shape[0], resized_img.shape[1] / img.shape[1])
+    # resized_img = np.pad(
+    #     resized_img,((0,int(cfg.PREPROC.MAX_SIZE)-resized_img.shape[0]),(0,int(cfg.PREPROC.MAX_SIZE)-resized_img.shape[1]),(0,0)),mode='constant')
     # boxes, probs, labels, *masks = model_func(resized_img)
+    import time
+    t0 = time.time()
     boxes, labels, *polygons = model_func(resized_img)
+    global gt,gc
+    gc = gc+1
+    gt = gt+time.time()-t0 if gc>10 else 0
+    if gc%500==0:
+        print(gc,gt/(gc-10),time.time()-t0)
     # print('Time:',tim.time()-t0,polygons[0].shape)
     probs = boxes[:,4]
     boxes = boxes[:,:4]

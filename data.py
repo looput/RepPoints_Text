@@ -559,7 +559,8 @@ if __name__ == "__main__":
     cfg.DATA.RATIO=True
     cfg.PREPROC.TRAIN_SHORT_EDGE_SIZE=[540,1200]
     cfg.PREPROC.MAX_SIZE=1800
-    cfg.DATA.TRAIN=['text_train_1']
+    # cfg.DATA.TRAIN=['text_train_5']
+    cfg.DATA.TRAIN=['text_3']
 
     # register_coco(os.path.expanduser("~/data/coco"))
     register_test('/home/lupu/27_screenshot/test_data')
@@ -582,7 +583,7 @@ if __name__ == "__main__":
             box=box.astype(np.int32).reshape(-1,2)
             color_l=[(255,255,255),(0,0,255),(255,255,0),(255,0,0)]
             for index,point in enumerate(box):
-                cv2.circle(img_show,(point[0],point[1]),1,color_l[1],1)
+                cv2.circle(img_show,(point[0],point[1]),0.5,color_l[1],1)
                 cv2.putText(img_show,'%d'%index,(point[0],point[1]),cv2.FONT_HERSHEY_SIMPLEX,0.4,color_l[1],1)
         # plt.imshow(img_show)
         cv2.imshow('img',img_show)

@@ -85,6 +85,8 @@ class AttrDict():
 
 config = AttrDict()
 _C = config     # short alias to avoid coding
+# train configs
+_C.LOG_DIR = ''
 
 # mode flags ---------------------
 _C.TRAINER = 'replicated'  # options: 'horovod', 'replicated'
@@ -96,10 +98,11 @@ _C.MODE_POLYGON = True
 _C.DATA.BASEDIR = '/home/lupu/27_screenshot/'
 # All available dataset names are defined in `dataset/coco.py:register_coco`.
 # All TRAIN dataset will be concatenated for training.
-# _C.DATA.TRAIN = ('text_train',) 
-_C.DATA.TRAIN = [f'text_train_{i}' for i in range(18,19)]
+# _C.DATA.TRAIN = ('text_train_5',) 
+_C.DATA.TRAIN = [f'text_train_{i}' for i in range(0,19)]
 # Each VAL dataset will be evaluated separately (instead of concatenated)
 _C.DATA.VAL = [f'text_{i}' for i in range(0,11)]  # AKA minival2014
+# _C.DATA.VAL = [f'text_{i}' for i in range(0,13)]  # AKA minival2014
 
 # These two configs will be populated later inside `finalize_configs`.
 _C.DATA.NUM_CATEGORY = 1  # without the background class (e.g., 80 for COCO)
@@ -166,6 +169,7 @@ _C.TRAIN.CHECKPOINT_PERIOD = 20  # period (epochs) to save model
 _C.PREPROC.TRAIN_SHORT_EDGE_SIZE = [600, 600]  # [min, max] to sample from
 _C.PREPROC.TEST_SHORT_EDGE_SIZE = 800
 _C.PREPROC.MAX_SIZE = 800
+_C.PREPROC.ANGLE = 1.
 # mean and std in RGB order.
 # Un-scaled version: [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
 _C.PREPROC.PIXEL_MEAN = [123.675, 116.28, 103.53]
@@ -174,6 +178,11 @@ _C.PREPROC.PIXEL_STD = [58.395, 57.12, 57.375]
 # RepPoint heads -------------------
 _C.REPPOINTS.NUM_POINTS= 9
 _C.REPPOINTS.FEAT_DIMS= 128
+_C.REPPOINTS.OUT_FEAT_DIMS= 128
+_C.REPPOINTS.PTS_CONVS= 2
+_C.REPPOINTS.CLS_CONVS= 2
+_C.REPPOINTS.CLS_REWEI= False
+_C.REPPOINTS.PTS_REWEI= False
 
 # anchors -------------------------
 _C.RPN.ANCHOR_STRIDE = 16
@@ -211,7 +220,7 @@ _C.FRCNN.FG_THRESH = 0.5
 _C.FRCNN.FG_RATIO = 0.25  # fg ratio in a ROI batch
 
 # FPN -------------------------
-_C.FPN.STRIDES = (8,16,32)
+_C.FPN.STRIDES = (4,8,16,32)
 
 _C.FPN.ANCHOR_STRIDES = (4, 8, 16, 32, 64)  # strides for each FPN level. Must be the same length as ANCHOR_SIZES
 _C.FPN.PROPOSAL_MODE = 'Level'  # 'Level', 'Joint'

@@ -1,10 +1,13 @@
+from pickle import TRUE
 from matplotlib.pyplot import text
-from .file_util import read_file,read_dir
+from numpy.core.fromnumeric import mean
 import Polygon as plg
 import numpy as np
 import re
 import string
 
+from .file_util import read_file,read_dir
+from .utils import merge 
 # pred_root = '../../outputs/submit_ctw1500/'
 # gt_root = '../../data/CTW1500/test/text_label_curve/'
 
@@ -47,6 +50,7 @@ def get_pred(path):
         bbox = [(int)(x) for x in bbox]
         bboxes.append(bbox)
         texts.append(text)
+    
     return bboxes,texts
 
 def get_gt(path):
@@ -62,12 +66,21 @@ def get_gt(path):
         num_parts = [nn for nn in num_parts if nn.isdigit()]
         num_parts = num_parts[:(len(num_parts)//2)*2]
         text = ''.join(parts[1+len(num_parts):])
+        # print(text.split('@')[0])
+        text = text.split('@')[0]
+        if text in ["ar_cseal", "rect_seal", "watermark_cross", "arc_text", "dots", "hard"]:
+            continue
         # print(text)
         polygon = [int(p) for p in num_parts]
         bboxes.append(polygon)
         texts.append(text)
-        ignores.append(1 if ('dots' in text or 'arc_seal' in text or 'rect_seal' in text) else 0)
+        if text in ["ar_cseal", "rect_seal", "watermark_cross", "arc_text", "dots", "hard"]:
+            ignores.append(1)
+        else:
+            ignores.append(0)
+        # ignores.append(0 if ('dots' in text or 'arc_seal' in text or 'rect_seal' in text) else 0)
 
+    # bboxes,texts,ignores = merge(bboxes,texts,ignores)
     return bboxes,texts,ignores
 
 def detection_filtering(preds,pred_texts,gts,gt_texts,ignores,threshold=0.5):
@@ -108,13 +121,28 @@ def get_intersection(pD,pG):
         return 0
     return pInt.area()
 
+def polygon_bbox(pts,flag=False):
+    if flag:
+        return np.array([
+            [pts[:,0].min(),pts[:,1].min()],
+            [pts[:,0].max(),pts[:,1].min()],
+            [pts[:,0].max(),pts[:,1].max()],
+            [pts[:,0].min(),pts[:,1].max()],])
+    else:
+        return pts
+
 def eval_result(pred_root,gt_root):
     th = 0.5
     pred_list = read_dir(pred_root)
 
     tp, fp, npos = 0, 0, 0
     tp_rec, fp_rec, npos = 0, 0, 0
-    
+    statistic={
+        'iou':[],
+        'w_shift':[],
+        'diou':[]
+    }
+    iou_dict = {}
     for pred_path in pred_list:
         preds,texts = get_pred(pred_path)
         gt_path = gt_root+'/' + pred_path.split('/')[-1]
@@ -129,23 +157,35 @@ def eval_result(pred_root,gt_root):
             # if pred.shape[0] <= 2:
             #     continue
 
-            pred_p = plg.Polygon(pred)
+            pred_p = plg.Polygon(polygon_bbox(pred))
             
             flag = False
             # flag_rec = False
+            max_iou = 0
             for gt_id, gt in enumerate(gts):
                 gt = np.array(gt)
                 gt = gt.reshape(int(gt.shape[0] / 2), 2)
-                gt_p = plg.Polygon(gt)
+                gt_p = plg.Polygon(polygon_bbox(gt))
 
                 union = get_union(pred_p, gt_p)
                 inter = get_intersection(pred_p, gt_p)
 
-                if inter * 1.0 / union >= th:
+                if inter * 1.0 / (union+1e-6) >= th:
                     if gt_id not in cover:
                         flag = True
                         cover.add(gt_id)
+                    if inter * 1.0 / (union+1e-6)>max_iou:
+                        if gt_p.area()>0:
+                            max_iou = inter * 1.0 / (union+1e-6)
+                            statistic['iou'].append(inter/gt_p.area())
+                            statistic['w_shift'].append(2*(gt_p.area()-inter)/(np.linalg.norm(gt[0,:]-gt[-1,:]))**2)
 
+                            gt_c = gt.mean(0)
+                            pred_c = pred.mean(0)
+                            mer = polygon_bbox(np.concatenate((gt,pred),0),True)
+                            statistic['diou'].append(inter * 1.0 / (union+1e-6) - np.linalg.norm(gt_c-pred_c)/np.linalg.norm(mer[0,:]-mer[2,:]))
+
+                            iou_dict[gt_p.area()]=inter/gt_p.area()
                         # flag_rec=abs(int(gt_angles[gt_id])-int(angle))<45
                         # print(int(gt_angles[gt_id]),int(angle))
             if flag:
@@ -169,4 +209,14 @@ def eval_result(pred_root,gt_root):
     print('P, R, F, %.4f %.4f %.4f'%(precision, recall, hmean))
     # print('p: %.4f, r: %.4f, f: %.4f, p: %.4f, r: %.4f, f_angle: %.4f'%(precision, recall, hmean,precision_rec,recall_rec,hmean_rec))
     
-    return {'tp':tp, 'fp':fp, 'npos':npos,'precision':precision,'recall':recall,'hmean':hmean}
+
+    # import matplotlib.pyplot as plt
+    # plt.scatter(list(iou_dict.keys()),list(iou_dict.values()),1)
+    # plt.show()
+    iou = statistic['iou']
+    # print(mean(iou),sum(statistic['w_shift'])/len(statistic['w_shift']))
+
+    return {'tp':tp, 'fp':fp, 'npos':npos,'precision':precision,'recall':recall,'hmean':hmean,'sum_iou':sum(iou),'c_iou':len(iou),'statictis':statistic}
+
+if __name__ == '__mian__':
+    pass
