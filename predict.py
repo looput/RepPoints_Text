@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import argparse
+from sys import exc_info
 import yaml
 
 from dataset.text import register_text_train,register_test
@@ -27,7 +28,7 @@ from eval import DetectionResult, multithread_predict_dataflow, predict_image
 from modeling.generalized_rcnn import ResNetC4Model, ResNetFPNModel
 from modeling.reppoint_detector import RepPointsFPNDet
 from viz import (
-    draw_annotation, draw_final_outputs, draw_predictions,
+    draw_annotation, draw_final_outputs, draw_gts, draw_predictions,
     draw_proposal_recall, draw_final_outputs_blackwhite)
 
 
@@ -102,10 +103,16 @@ def do_evaluate(pred_config, output_file):
         print(name)
         res = DatasetRegistry.get(dataset).eval_inference_results(all_results, output)
         p,r,h = res['precision'],res['recall'],res['hmean']
-        f.write(f'{name}, {p:0.4}, {r:0.4}, {h:0.4}\r\n')
+        m_iou = 0. if 'sum_iou' not in res.keys() else res['sum_iou']/res['c_iou']
+        extra_info = ''
+        for k in res['statictis'].keys():
+            m =sum(res['statictis'][k])/len(res['statictis'][k])
+            extra_info+= f'{m:0.4},'
+
+        f.write(f'{name}, {p:0.4}, {r:0.4}, {h:0.4}, {extra_info}\r\n')
         for k in final_res.keys():
             final_res[k]+=res[k]
-        print(res)
+        print(f'{name}, {p:0.4}, {r:0.4}, {h:0.4}, {extra_info}')
     
     tp,fp,npos = final_res['tp'],final_res['fp'],final_res['npos']
     precision = tp / (tp + fp)
@@ -126,6 +133,11 @@ def do_predict(pred_func, input_file):
         final = draw_final_outputs_blackwhite(img, results)
     else:
         final = draw_final_outputs(img, results)
+    # draw gt
+    try:
+        final = draw_gts(final,os.path.splitext(img_pth)[0]+'.txt')
+    except:
+        pass
     viz =final
     # viz = np.concatenate((img, final), axis=1)
     nm = os.path.basename(input_file).replace('.jpg','.png')
@@ -144,6 +156,48 @@ def do_predict(pred_func, input_file):
         sys.exit()
     # tpviz.interactive_imshow(viz)
 
+
+class CusPredictor(OfflinePredictor):
+    def __init__(self, config):
+        super(CusPredictor,self).__init__(config)
+    
+    def _do_call(self, dp):
+        assert len(dp) == len(self.input_tensors), \
+            "{} != {}".format(len(dp), len(self.input_tensors))
+        if self.sess is None:
+            self.sess = tf.get_default_session()
+            assert self.sess is not None, "Predictor isn't called under a default session!"
+
+        if self._callable is None:
+            self._callable = self.sess.make_callable(
+                fetches=self.output_tensors,
+                feed_list=self.input_tensors,
+                accept_options=self.ACCEPT_OPTIONS)
+        run_metadata = tf.RunMetadata()
+        options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        outs =  self._callable(*dp,options=options,
+               run_metadata=run_metadata)
+        
+        # opts = (tf.compat.v1.profiler.ProfileOptionBuilder(
+        #     tf.profiler.ProfileOptionBuilder.time_and_memory())
+        #     .with_step(0).with_timeline_output('time_line.json')
+        #     # .with_displaying_options(show_name_regexes=['.*reppoints_head.*'])
+        #     .build())
+        # tf.profiler.profile(
+        #     tf.get_default_graph(),
+        #     run_meta=run_metadata,
+        #     cmd='scope',
+        #     options=opts)
+        
+        # advice = tf.profiler.advise(tf.get_default_graph(), run_meta=run_metadata)
+        # tf.profiler.profile(
+        #     tf.get_default_graph(),
+        #     run_meta=run_metadata,
+        #     options=tf.profiler.ProfileOptionBuilder.float_operation())
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/profiler/g3doc/profile_model_architecture.md#caveats
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/profiler/model_analyzer.py
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/profiler/g3doc/python_api.md
+        return outs
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -200,7 +254,8 @@ if __name__ == '__main__':
             ModelExporter(predcfg).export_serving(args.output_serving)
 
         if args.predict:
-            predictor = OfflinePredictor(predcfg)
+            predictor = CusPredictor(predcfg)
+            predictor.ACCEPT_OPTIONS=True
             for image_file in args.predict:
                 file_lst = glob.glob(image_file)
                 for img_pth in file_lst:
