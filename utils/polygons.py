@@ -52,6 +52,8 @@ def spilt_point(pts):
     if pts.shape[0]==4:
         # sort the point order.
         # the clockwise vec x coord is greater to 0
+        # NOTE 这里对于某些纵向小文本如何处理, 这里先直接按照上下处理
+        return pts[:2,:],pts[2:,:]
 
         # for ICDAR15 some vechile sample, adjust the order
         # 将点都分布在长边之后，结果会发生下降，这个有bug的版本反而结果高些
