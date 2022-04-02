@@ -11,9 +11,7 @@ set(CMAKE_BUILD_TYPE RelWithDebInfo)
 set(CMAKE_CXX_FLAGS -D_GLIBCXX_USE_CXX11_ABI=0)
 
 
-# set(TF_INCLUDE_PATH /home/dl/anaconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/include)
 set(TF_INCLUDE_PATH /data/lupu/miniconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/include)
-# set(TF_INCLUDE_PATH /home/dl/anaconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/include/third_party/gpus)
 
 # include_directories(/home/lupu/custom_ops/lib/include)
 # include_directories(/data/lupu/miniconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/include/third_party/eigen3)
@@ -37,7 +35,6 @@ add_library(ops SHARED deformable_conv2d.cpp deformable_conv.cu  deformable_conv
 target_include_directories(ops PUBLIC ${CUDA_INCLUDE_DIRS} ${TF_INCLUDE_PATH})
 message(STATUS ${TF_INCLUDE_PATH})
 
-#set_property(TARGET ops PROPERTY CXX_STANDARD 11)
-# target_link_libraries(ops PUBLIC ${CUDA_LIBRARIES} /home/dl/anaconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/libtensorflow_framework.so.1)
+site-packages/tensorflow/libtensorflow_framework.so.1)
 target_link_libraries(ops PUBLIC ${CUDA_LIBRARIES} /data/lupu/miniconda3/envs/tf18/lib/python3.6/site-packages/tensorflow/libtensorflow_framework.so.1)
 target_compile_definitions(ops PRIVATE -D_GLIBCXX_USE_CXX11_ABI=0)

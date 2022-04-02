@@ -74,13 +74,13 @@ class TextDection(DatasetSplit):
                 minxy = poly.min(axis=0)
 
                 text = text.split('@')[0]
-                if text in ["arc_seal", "rect_seal", "watermark_cross", "arc_text", "dots", "hard"]:
-                    continue
+                # if text in ["arc_seal", "rect_seal", "watermark_cross", "arc_text", "dots", "hard"]:
+                #     continue
 
                 boxes.append([minxy[0], minxy[1], maxxy[0], maxxy[1]])
                 segs.append([poly])
 
-                if text=='###' or 'arc_seal' in text or 'rect_seal' in text or 'square_stamp' in text or 'dots' in text:
+                if text=='###':
                     crowds.append(1)
                 else:
                     crowds.append(0)
@@ -156,25 +156,7 @@ def register_text(basedir):
 
 def register_text_train(basedir):
     dataset_list = [
-        'zhongyuan',
-        'insurance_form',
-        'jinyu_medical',
-        'pufa_v2',
-        'tiny_invoice',
-        'lading_bill',
-        'zhongyuan_v2',
-        'credit_real_pufa',
-        'zhongchuang',
-        'taobao_text',
-        'gaopaiyi',
-        'financial_statement',
-        'zhongchuang_v2',
-        'quota_invoice',
-        'Docs_elec',
-        'table_text',
-        'gen_doc_1214',
-        'gen_doc_1221',
-        'pufa_gen_1022',
+        'icdar',
     ]
     for idx,split in enumerate(dataset_list):
         name = f'text_train_{idx}'
@@ -186,27 +168,7 @@ def register_text_train(basedir):
 
 def register_test(basedir):
     dataset_list = [
-        'zhongyuan',
-        'insurance_form',
-        'pufa_v2',
-        # 'pufa_v2/contract_all',
-        # 'pufa_v2/zhangcheng_all',
-        'zhongyuan_v2',
-        # 'zhongyuan_v2/Hungary',
-        # 'zhongyuan_v2/Philippines',
-        'Docs_elec',
-        # 'train_tickets_pre_other',
-        'credit_real_test',
-        'pufa_gen_1022',
-        # 'taobao_text',
-        # 'gen_doc_1021',
-        'financial_statement',
-        'gaopaiyi',
-        'zhongchuang_v2',
-        'general_table',
-        # 'douyu',
-        # 'ID_card',
-        # 'waybill_electronic',
+        'icdar',
     ]
     for idx,split in enumerate(dataset_list):
         name = f'text_{idx}'
@@ -217,8 +179,8 @@ def register_test(basedir):
         DatasetRegistry.register_metadata(name, "dataset_names", dataset_list[idx])
 
 if __name__ == '__main__':
-    basedir = '/home/lupu/27_screenshot/'
-    roidbs = TextDection(basedir, "zhongyuan/train").training_roidbs()
+    basedir = './'
+    roidbs = TextDection(basedir, "train").training_roidbs()
     print("#images:", len(roidbs))
 
     from viz import draw_annotation
