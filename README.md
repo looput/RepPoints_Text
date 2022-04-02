@@ -1,3 +1,5 @@
+# 基于RepPoints的不规则文本检测器TF实现
+
 ## Introduction
 该代码复现主基于TensorPack, 网络构建使用TF1的操作完成。整个代码结构参考FastRCNN/MaskRCNN，具有一定的拓展能力，后续可添加其他检测和识别方法，对代码进行整合。
 
